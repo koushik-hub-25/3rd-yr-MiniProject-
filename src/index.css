@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+.leaflet-container {
+  background: #0f172a !important; /* slate-900 */
+}
+.custom-popup .leaflet-popup-content-wrapper,
+.custom-popup .leaflet-popup-tip {
+  background: #cbd5e1; /* slate-300 */
+  color: #0f172a;
+}
+
