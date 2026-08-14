@@ -113,8 +113,8 @@ export default function Analytics() {
                   dataKey="count"
                   nameKey="category"
                 >
-                  {(analytics?.categoryDistribution || []).map((_: any, index: number) => (
-                    <Cell key={`cell-${index}`} fill={CATEGORY_COLORS[index % CATEGORY_COLORS.length]} />
+                  {(analytics?.categoryDistribution || []).map((entry: any, index: number) => (
+                    <Cell key={`cat-cell-${entry.category || entry.name || index}`} fill={CATEGORY_COLORS[index % CATEGORY_COLORS.length]} />
                   ))}
                 </Pie>
                 <RechartsTooltip
@@ -123,12 +123,16 @@ export default function Analytics() {
               </PieChart>
             </ResponsiveContainer>
             <div className="flex flex-wrap gap-2 justify-center text-[10px]">
-              {(analytics?.categoryDistribution || []).slice(0, 5).map((d: any, i: number) => (
-                <span key={d.category} className="flex items-center gap-1 text-slate-300">
-                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: CATEGORY_COLORS[i % CATEGORY_COLORS.length] }}></span>
-                  {d.category}: {d.count}
-                </span>
-              ))}
+              {(analytics?.categoryDistribution || []).slice(0, 5).map((d: any, i: number) => {
+                const label = d.category || d.name || `Category ${i + 1}`;
+                const val = d.count ?? d.value ?? 0;
+                return (
+                  <span key={`cat-label-${label}-${i}`} className="flex items-center gap-1 text-slate-300">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: CATEGORY_COLORS[i % CATEGORY_COLORS.length] }}></span>
+                    {label}: {val}
+                  </span>
+                );
+              })}
             </div>
           </CardContent>
         </Card>
@@ -149,8 +153,8 @@ export default function Analytics() {
                   contentStyle={{ backgroundColor: "#0B1120", borderColor: "#1E293B", borderRadius: "8px", fontSize: "12px" }}
                 />
                 <Bar dataKey="count" fill="#10b981" radius={[4, 4, 0, 0]}>
-                  {(analytics?.iocDistribution || []).map((_: any, index: number) => (
-                    <Cell key={`ioc-cell-${index}`} fill={IOC_COLORS[index % IOC_COLORS.length]} />
+                  {(analytics?.iocDistribution || []).map((entry: any, index: number) => (
+                    <Cell key={`ioc-cell-${entry.type || entry.name || index}`} fill={IOC_COLORS[index % IOC_COLORS.length]} />
                   ))}
                 </Bar>
               </BarChart>

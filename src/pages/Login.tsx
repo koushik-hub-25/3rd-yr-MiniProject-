@@ -1,3 +1,7 @@
+/**
+ * ShieldZen Academic Research Prototype - Analyst Authentication View
+ * Note: Features prototype authentication with simulated RBAC roles for academic demonstrations.
+ */
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";

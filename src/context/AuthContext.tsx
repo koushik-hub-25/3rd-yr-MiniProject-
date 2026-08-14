@@ -1,3 +1,8 @@
+/**
+ * ShieldZen Academic Research Prototype - Authentication Context
+ * Note: This provides lightweight client-side authentication and session state
+ * management for academic and demonstration purposes.
+ */
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { UserProfile } from "../types";
 

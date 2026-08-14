@@ -195,7 +195,7 @@ export default function ThreatIntelligence() {
                 <CardTitle>
                   <Filter className="w-3.5 h-3.5 text-cyan-400" /> Intelligence Feed ({filteredThreats.length})
                 </CardTitle>
-                <span className="text-[10px] text-slate-400 font-mono">Real-time telemetry</span>
+                <span className="text-[10px] text-slate-400 font-mono">Correlated CTI Feed</span>
               </div>
             </CardHeader>
 

@@ -31,6 +31,18 @@ async function seedDatabaseIfEmpty() {
     if (Number(existing[0]?.count || 0) === 0) {
       console.log("Database is empty. Populating with comprehensive synthetic CTI dataset...");
       await populateSyntheticData();
+    } else {
+      // Ensure synthetic incidents have realistic 6-month historical spread for analytics
+      const existingIncidents = await db.query.incidents.findMany();
+      for (let i = 0; i < existingIncidents.length; i++) {
+        const inc = existingIncidents[i];
+        if (inc.id.startsWith("inc-syn-")) {
+          const num = parseInt(inc.id.replace("inc-syn-", ""), 10) || (i + 1);
+          const daysAgo = num <= 6 ? ((num - 1) * 0.4) : (3 + (num - 7) * 4.8);
+          const newDate = new Date(Date.now() - 1000 * 60 * 60 * 24 * daysAgo).toISOString();
+          await db.update(incidents).set({ date: newDate }).where(eq(incidents.id, inc.id));
+        }
+      }
     }
   } catch (err) {
     console.error("Database seed check error:", err);
@@ -226,7 +238,7 @@ async function startServer() {
     }
   });
 
-  // Upload Intelligence Report
+  // Upload Intelligence Report (TXT, PDF, DOCX)
   app.post("/api/upload", upload.single("file"), async (req, res) => {
     try {
       let text = "";
@@ -237,17 +249,46 @@ async function startServer() {
         filename = req.file.originalname;
         fileType = req.file.mimetype;
 
-        if (req.file.mimetype === "application/pdf") {
+        const origNameLower = req.file.originalname.toLowerCase();
+        if (
+          req.file.mimetype === "application/pdf" ||
+          origNameLower.endsWith(".pdf")
+        ) {
           try {
             const pdfModule = await import("pdf-parse") as any;
             const pdfParse = pdfModule.default || pdfModule;
             const data = await pdfParse(req.file.buffer);
-            text = data.text;
-          } catch (e) {
-            text = req.file.buffer.toString("utf-8");
+            text = data.text || "";
+            if (!text.trim()) {
+              return res.status(400).json({ error: "The uploaded PDF document contains no extractable text." });
+            }
+          } catch (e: any) {
+            console.error("PDF parse error:", e);
+            return res.status(400).json({ error: "Failed to extract text from PDF: " + (e?.message || "Invalid or unreadable document.") });
+          }
+        } else if (
+          req.file.mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+          req.file.mimetype === "application/msword" ||
+          origNameLower.endsWith(".docx") ||
+          origNameLower.endsWith(".doc")
+        ) {
+          try {
+            const mammothModule = await import("mammoth") as any;
+            const mammoth = mammothModule.default || mammothModule;
+            const result = await mammoth.extractRawText({ buffer: req.file.buffer });
+            text = result.value || "";
+            if (!text.trim()) {
+              return res.status(400).json({ error: "The uploaded DOCX document contains no extractable text content." });
+            }
+          } catch (e: any) {
+            console.error("DOCX parse error:", e);
+            return res.status(400).json({ error: "Failed to parse DOCX document: " + (e?.message || "Invalid or unreadable document.") });
           }
         } else {
           text = req.file.buffer.toString("utf-8");
+          if (!text.trim()) {
+            return res.status(400).json({ error: "Uploaded text document is empty." });
+          }
         }
       } else if (req.body.text) {
         text = req.body.text;
@@ -558,20 +599,57 @@ async function startServer() {
         }
       });
 
-      // Timeline / Monthly trend
-      const monthlyTrend = [
-        { month: "Jan", critical: 4, high: 8, medium: 12, low: 18 },
-        { month: "Feb", critical: 6, high: 11, medium: 14, low: 15 },
-        { month: "Mar", critical: 9, high: 15, medium: 18, low: 12 },
-        { month: "Apr", critical: 12, high: 19, medium: 22, low: 16 },
-        { month: "May", critical: 15, high: 24, medium: 20, low: 14 },
-        { month: "Jun (Current)", critical: severityMap["CRITICAL"] || 18, high: severityMap["HIGH"] || 28, medium: severityMap["MEDIUM"] || 24, low: severityMap["LOW"] || 10 },
-      ];
+      // Dynamic Timeline / Monthly trend calculated from actual incidents and threats
+      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const now = new Date();
+      const monthlyTrend: Array<{ month: string; critical: number; high: number; medium: number; low: number }> = [];
+
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const mIndex = d.getMonth();
+        const mYear = d.getFullYear();
+        const monthLabel = i === 0 ? `${monthNames[mIndex]} (Current)` : monthNames[mIndex];
+
+        let critical = 0;
+        let high = 0;
+        let medium = 0;
+        let low = 0;
+
+        allIncidents.forEach((inc: any) => {
+          const incDate = inc.date ? new Date(inc.date) : null;
+          if (incDate && !isNaN(incDate.getTime()) && incDate.getMonth() === mIndex && incDate.getFullYear() === mYear) {
+            const sev = String(inc.severity || "").toUpperCase();
+            if (sev === "CRITICAL") critical++;
+            else if (sev === "HIGH") high++;
+            else if (sev === "MEDIUM") medium++;
+            else if (sev === "LOW") low++;
+          }
+        });
+
+        allThreats.forEach((thr: any) => {
+          const thrDate = thr.detectedAt ? new Date(thr.detectedAt) : null;
+          if (thrDate && !isNaN(thrDate.getTime()) && thrDate.getMonth() === mIndex && thrDate.getFullYear() === mYear) {
+            const sev = String(thr.severity || "").toUpperCase();
+            if (sev === "CRITICAL") critical++;
+            else if (sev === "HIGH") high++;
+            else if (sev === "MEDIUM") medium++;
+            else if (sev === "LOW") low++;
+          }
+        });
+
+        monthlyTrend.push({
+          month: monthLabel,
+          critical,
+          high,
+          medium,
+          low
+        });
+      }
 
       res.json({
-        severityDistribution: Object.entries(severityMap).map(([name, value]) => ({ name, value })),
-        categoryDistribution: Object.entries(categoryMap).map(([name, value]) => ({ name, value })),
-        iocDistribution: Object.entries(iocTypeMap).map(([name, value]) => ({ name, value })),
+        severityDistribution: Object.entries(severityMap).map(([name, value]) => ({ name, value, severity: name, count: value })),
+        categoryDistribution: Object.entries(categoryMap).map(([name, value]) => ({ name, value, category: name, count: value })),
+        iocDistribution: Object.entries(iocTypeMap).map(([name, value]) => ({ name, value, type: name, count: value })),
         topMitreTechniques: Object.entries(mitreMap)
           .sort((a, b) => b[1] - a[1])
           .slice(0, 7)
@@ -702,7 +780,7 @@ async function startServer() {
           name: "Google Gemini 3.7 Flash AI",
           status: hasGemini ? "Connected" : "Demo AI Mode",
           category: "AI Engine",
-          description: "Generative entity extraction, deep reasoning & explainable risk scoring",
+          description: "AI-generated analysis based on available ShieldZen intelligence.",
           latency: hasGemini ? "380ms" : "12ms (Local)",
           isVerified: true
         },
@@ -711,7 +789,7 @@ async function startServer() {
           name: "NIST National Vulnerability Database (NVD)",
           status: "Connected",
           category: "Vulnerability Catalog",
-          description: "Official CVE dictionary, CVSS v3.1 metrics, and affected CPE configurations",
+          description: "National Vulnerability Database — public vulnerability intelligence with live CVE lookup and cached fallback data.",
           latency: "120ms",
           isVerified: true
         },
@@ -720,7 +798,7 @@ async function startServer() {
           name: "CISA Known Exploited Vulnerabilities (KEV)",
           status: "Connected",
           category: "Exploitation Catalog",
-          description: "Federal catalog of confirmed in-the-wild weaponized vulnerabilities",
+          description: "Cybersecurity and Infrastructure Security Agency Known Exploited Vulnerabilities catalog with periodic synchronization and cached fallback data.",
           latency: "95ms",
           isVerified: true
         },
@@ -729,8 +807,17 @@ async function startServer() {
           name: "MITRE ATT&CK Enterprise Matrix v15",
           status: "Connected",
           category: "Adversary TTPs",
-          description: "Tactics, techniques, and detection telemetry mapping framework",
+          description: "MITRE ATT&CK technique knowledge base used for threat correlation and analysis.",
           latency: "5ms (In-Memory)",
+          isVerified: true
+        },
+        {
+          id: "reports",
+          name: "Uploaded Intelligence Reports",
+          status: "Active",
+          category: "Analyst Submissions",
+          description: "Analyst-uploaded intelligence reports processed by ShieldZen AI.",
+          latency: "5ms",
           isVerified: true
         },
         {
@@ -738,7 +825,7 @@ async function startServer() {
           name: "ShieldZen Synthetic CTI Pipeline",
           status: "Active",
           category: "Simulation & Baseline",
-          description: "Curated academic scenarios and deterministic test telemetry",
+          description: "Deterministic synthetic scenario dataset for academic demonstration.",
           latency: "2ms",
           isVerified: false
         }
@@ -796,10 +883,11 @@ async function startServer() {
 
   // ==========================================
   // Authentication Prototype Endpoints
+  // Note: Prototype authentication for academic demonstration.
   // ==========================================
   app.post("/api/auth/login", (req, res) => {
     const { email, password } = req.body;
-    // Safe academic prototype credentials
+    // Safe academic prototype credentials with demo fallback
     if (!email) {
       return res.status(400).json({ error: "Email is required" });
     }

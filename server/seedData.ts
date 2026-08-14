@@ -878,13 +878,13 @@ Autonomous System AS-99411 announced unauthorized IP prefixes belonging to tier-
     incidentTemplates.forEach((t, i) => {
       incCount++;
       const loc = locations[(i + round * 4) % locations.length];
-      const hoursAgo = (incCount * 7.5) + Math.random() * 5;
+      const daysAgo = incCount <= 6 ? ((incCount - 1) * 0.4) : (3 + (incCount - 7) * 4.8);
       incidentsList.push({
         id: `inc-syn-${incCount}`,
         threatId: t.thrId,
         reportId: `rep-syn-0${(i % 10) + 1}`,
         title: `${t.title} [Event #${incCount}]`,
-        date: new Date(Date.now() - 1000 * 60 * 60 * hoursAgo).toISOString(),
+        date: new Date(Date.now() - 1000 * 60 * 60 * 24 * daysAgo).toISOString(),
         location: loc.city,
         coordinates: loc.coords,
         category: t.cat,
