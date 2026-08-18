@@ -35,8 +35,8 @@ async function seedDatabaseIfEmpty() {
       // Ensure synthetic incidents have realistic 6-month historical spread for analytics
       const existingIncidents = await db.query.incidents.findMany();
       for (let i = 0; i < existingIncidents.length; i++) {
-        const inc = existingIncidents[i];
-        if (inc.id.startsWith("inc-syn-")) {
+        const inc: any = existingIncidents[i];
+        if (typeof inc?.id === "string" && inc.id.startsWith("inc-syn-")) {
           const num = parseInt(inc.id.replace("inc-syn-", ""), 10) || (i + 1);
           const daysAgo = num <= 6 ? ((num - 1) * 0.4) : (3 + (num - 7) * 4.8);
           const newDate = new Date(Date.now() - 1000 * 60 * 60 * 24 * daysAgo).toISOString();
