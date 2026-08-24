@@ -355,26 +355,60 @@ async function createTables() {
       createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
     );
   `);
+
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS intelligenceSources (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      sourceType TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      endpoint TEXT,
+      status TEXT NOT NULL DEFAULT 'CACHED',
+      lastSuccessfulSync INTEGER,
+      lastAttemptedSync INTEGER,
+      nextScheduledSync INTEGER,
+      recordCount INTEGER DEFAULT 0,
+      errorMessage TEXT,
+      syncDurationMs INTEGER DEFAULT 0,
+      isLive INTEGER DEFAULT 0,
+      isSynthetic INTEGER DEFAULT 0,
+      freshnessSeconds INTEGER DEFAULT 0,
+      syncIntervalMinutes INTEGER DEFAULT 30,
+      createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      updatedAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+  `);
+
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS cachedVulnerabilities (
+      cveId TEXT PRIMARY KEY,
+      source TEXT NOT NULL DEFAULT 'NVD',
+      description TEXT NOT NULL,
+      cvssScore INTEGER,
+      cvssSeverity TEXT DEFAULT 'HIGH',
+      cvssVector TEXT,
+      cwe TEXT,
+      publishedDate TEXT,
+      lastModifiedDate TEXT,
+      affectedProducts TEXT,
+      "references" TEXT,
+      isCisaKev INTEGER DEFAULT 0,
+      cisaDateAdded TEXT,
+      cisaDueDate TEXT,
+      cisaRequiredAction TEXT,
+      knownRansomwareUse TEXT DEFAULT 'Unknown',
+      sourceStatus TEXT DEFAULT 'CACHED',
+      lastSyncedAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+  `);
 }
 
-export async function initDatabaseTables(retryCount = 0): Promise<void> {
+export async function initDatabaseTables(): Promise<void> {
   try {
-    // Run integrity check
-    const check = await activeClient.execute("PRAGMA integrity_check;");
-    const checkRow = check.rows?.[0] as any;
-    const checkResult = checkRow ? Object.values(checkRow)[0] : "ok";
-    if (checkResult !== "ok") {
-      throw new Error(`Database integrity check failed: ${JSON.stringify(checkResult)}`);
-    }
-
     await configurePragmas();
     await createTables();
   } catch (err: any) {
-    console.error(`[DB] Database initialization error (attempt ${retryCount + 1}):`, err?.message || err);
-    if (retryCount < 2) {
-      resetDatabase();
-      return initDatabaseTables(retryCount + 1);
-    }
+    console.error("[DB] Database initialization error:", err?.message || err);
     throw err;
   }
 }

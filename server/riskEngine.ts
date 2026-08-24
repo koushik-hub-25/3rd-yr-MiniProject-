@@ -11,6 +11,10 @@ export interface RiskFactor {
   weightPercentage: number;
   category: "VULNERABILITY" | "EXPLOITATION" | "ASSET_IMPACT" | "THREAT_INTEL";
   description: string;
+  source?: string;
+  provenanceStatus?: "LIVE" | "CACHED" | "SYNTHETIC" | "ANALYST_VERIFIED";
+  lastSynced?: string;
+  isSynthetic?: boolean;
 }
 
 export interface ExplainableRiskAssessment {
@@ -32,6 +36,8 @@ export interface ExplainableRiskAssessment {
     cvssSeverity: string;
     isCisaKev: boolean;
     description?: string;
+    source?: string;
+    provenanceStatus?: "LIVE" | "CACHED" | "SYNTHETIC";
   } | null;
   threat?: {
     id?: string;
@@ -39,7 +45,17 @@ export interface ExplainableRiskAssessment {
     severity: string;
     confidence: number;
     detectedAt?: string | Date;
+    isSynthetic?: boolean;
   } | null;
+  dataProvenance?: {
+    sources: {
+      name: string;
+      category: string;
+      status: "LIVE" | "CACHED" | "SYNTHETIC" | "ANALYST_VERIFIED";
+      isLive: boolean;
+      isSynthetic: boolean;
+    }[];
+  };
   evaluatedAt: string;
   formula: string;
 }
@@ -49,6 +65,7 @@ export interface RiskEvaluationParams {
   cveId?: string;
   cvssScore?: number;
   isCisaKev?: boolean;
+  vulnerabilitySourceStatus?: "LIVE" | "CACHED" | "SYNTHETIC";
 
   // Exploit Availability
   exploitAvailability?: "WEAPONIZED" | "PUBLIC_POC" | "THEORETICAL" | "NONE" | string;
@@ -68,6 +85,7 @@ export interface RiskEvaluationParams {
   threatConfidence?: number; // 0 - 100
   intelligenceRecencyDays?: number; // e.g. 3 days ago
   detectedAt?: string | Date;
+  isSynthetic?: boolean;
 }
 
 /**
@@ -77,6 +95,9 @@ export interface RiskEvaluationParams {
 export function calculateDeterministicRiskScore(params: RiskEvaluationParams): ExplainableRiskAssessment {
   const factors: RiskFactor[] = [];
   let rawSum = 0;
+
+  const isSynth = Boolean(params.isSynthetic);
+  const vulnStatus = params.vulnerabilitySourceStatus || (isSynth ? "SYNTHETIC" : "CACHED");
 
   // 1. CVSS Base Score Factor (Max 25 pts)
   // Scale: 0.0 - 10.0 => 0 - 25 points
@@ -90,6 +111,9 @@ export function calculateDeterministicRiskScore(params: RiskEvaluationParams): E
     maxPossible: 25,
     weightPercentage: 25,
     category: "VULNERABILITY",
+    source: "NIST National Vulnerability Database (NVD)",
+    provenanceStatus: isSynth ? "SYNTHETIC" : vulnStatus,
+    isSynthetic: isSynth,
     description: rawCvss > 0
       ? `Base CVSS score of ${rawCvss.toFixed(1)}/10.0 contributes ${cvssContribution} points (normalized to 25% max weight).`
       : "No direct CVSS base metric available (0 points)."
@@ -107,6 +131,9 @@ export function calculateDeterministicRiskScore(params: RiskEvaluationParams): E
     maxPossible: 20,
     weightPercentage: 20,
     category: "EXPLOITATION",
+    source: "CISA Known Exploited Vulnerabilities (KEV)",
+    provenanceStatus: isSynth ? "SYNTHETIC" : vulnStatus,
+    isSynthetic: isSynth,
     description: isKev
       ? "Confirmed active weaponized in-the-wild exploitation cataloged in CISA KEV (+20 points)."
       : "Not listed in CISA Known Exploited Vulnerabilities catalog (0 points)."
@@ -138,6 +165,9 @@ export function calculateDeterministicRiskScore(params: RiskEvaluationParams): E
     maxPossible: 15,
     weightPercentage: 15,
     category: "EXPLOITATION",
+    source: isKev ? "CISA KEV Catalog" : "Threat Intelligence Correlation Engine",
+    provenanceStatus: isSynth ? "SYNTHETIC" : vulnStatus,
+    isSynthetic: isSynth,
     description: `Exploit maturity level assessed as '${exploitLabel}' (${exploitContribution} points).`
   });
 
@@ -157,6 +187,9 @@ export function calculateDeterministicRiskScore(params: RiskEvaluationParams): E
     maxPossible: 15,
     weightPercentage: 15,
     category: "ASSET_IMPACT",
+    source: "Enterprise Asset Inventory (ShieldZen DB)",
+    provenanceStatus: "ANALYST_VERIFIED",
+    isSynthetic: isSynth,
     description: `Target asset criticality classified as ${crit} (+${critContribution} points).`
   });
 
@@ -175,6 +208,9 @@ export function calculateDeterministicRiskScore(params: RiskEvaluationParams): E
     maxPossible: 10,
     weightPercentage: 10,
     category: "ASSET_IMPACT",
+    source: "Network Topology & Zone Definition",
+    provenanceStatus: "ANALYST_VERIFIED",
+    isSynthetic: isSynth,
     description: exposure === "INTERNET"
       ? "Internet-facing asset with direct external perimeter attack surface (+10 points)."
       : exposure === "INTERNAL"
@@ -199,6 +235,9 @@ export function calculateDeterministicRiskScore(params: RiskEvaluationParams): E
     maxPossible: 10,
     weightPercentage: 10,
     category: "THREAT_INTEL",
+    source: "Analyst Assessment & Correlation Rules",
+    provenanceStatus: isSynth ? "SYNTHETIC" : "ANALYST_VERIFIED",
+    isSynthetic: isSynth,
     description: `Observed threat indicator severity assessed as ${sev} (+${sevContribution} points).`
   });
 
@@ -213,6 +252,9 @@ export function calculateDeterministicRiskScore(params: RiskEvaluationParams): E
     maxPossible: 5,
     weightPercentage: 5,
     category: "THREAT_INTEL",
+    source: "Telemetry Attribution Confidence",
+    provenanceStatus: isSynth ? "SYNTHETIC" : "ANALYST_VERIFIED",
+    isSynthetic: isSynth,
     description: `Telemetry and attribution confidence at ${conf}% contributes ${confContribution} points.`
   });
 
@@ -249,6 +291,9 @@ export function calculateDeterministicRiskScore(params: RiskEvaluationParams): E
     maxPossible: 5,
     weightPercentage: 5,
     category: "THREAT_INTEL",
+    source: "Temporal Intelligence Window",
+    provenanceStatus: isSynth ? "SYNTHETIC" : "ANALYST_VERIFIED",
+    isSynthetic: isSynth,
     description: `Intelligence recency window '${recencyLabel}' contributes ${recencyContribution} points.`
   });
 
@@ -296,15 +341,43 @@ export function calculateDeterministicRiskScore(params: RiskEvaluationParams): E
       cveId: params.cveId,
       cvssScore: rawCvss,
       cvssSeverity: rawCvss >= 9.0 ? "CRITICAL" : rawCvss >= 7.0 ? "HIGH" : rawCvss >= 4.0 ? "MEDIUM" : "LOW",
-      isCisaKev: isKev
+      isCisaKev: isKev,
+      source: isKev ? "CISA KEV / NIST NVD" : "NIST NVD",
+      provenanceStatus: isSynth ? "SYNTHETIC" : vulnStatus
     } : null,
     threat: params.threatTitle ? {
       id: params.threatId,
       title: params.threatTitle,
       severity: sev,
       confidence: conf,
-      detectedAt: params.detectedAt
+      detectedAt: params.detectedAt,
+      isSynthetic: isSynth
     } : null,
+    dataProvenance: {
+      sources: [
+        {
+          name: "NIST National Vulnerability Database",
+          category: "Vulnerability Catalog",
+          status: isSynth ? "SYNTHETIC" : vulnStatus,
+          isLive: vulnStatus === "LIVE",
+          isSynthetic: isSynth
+        },
+        {
+          name: "CISA Known Exploited Vulnerabilities",
+          category: "Active Exploitation Catalog",
+          status: isSynth ? "SYNTHETIC" : (isKev ? vulnStatus : "CACHED"),
+          isLive: vulnStatus === "LIVE",
+          isSynthetic: isSynth
+        },
+        {
+          name: "Enterprise Asset Inventory",
+          category: "Internal Infrastructure",
+          status: "ANALYST_VERIFIED",
+          isLive: true,
+          isSynthetic: isSynth
+        }
+      ]
+    },
     evaluatedAt: new Date().toISOString(),
     formula: "Score = CVSS(25) + CISA_KEV(20) + Exploit(15) + Criticality(15) + Exposure(10) + Severity(10) + Confidence(5) + Recency(5) [Capped at 100]"
   };
@@ -317,6 +390,7 @@ export async function evaluateRiskWithLiveIntel(params: RiskEvaluationParams): P
   let resolvedCvss = params.cvssScore;
   let resolvedKev = params.isCisaKev;
   let resolvedExploit = params.exploitAvailability;
+  let resolvedSourceStatus = params.vulnerabilitySourceStatus || "CACHED";
 
   if (params.cveId) {
     const cveNorm = params.cveId.toUpperCase().trim();
@@ -324,6 +398,9 @@ export async function evaluateRiskWithLiveIntel(params: RiskEvaluationParams): P
       const nvd = await fetchNvdCve(cveNorm);
       if (nvd && typeof nvd.cvssScore === "number") {
         resolvedCvss = nvd.cvssScore;
+        if (nvd.sourceStatus === "LIVE") {
+          resolvedSourceStatus = "LIVE";
+        }
       }
     }
 
@@ -342,7 +419,8 @@ export async function evaluateRiskWithLiveIntel(params: RiskEvaluationParams): P
     ...params,
     cvssScore: resolvedCvss,
     isCisaKev: resolvedKev,
-    exploitAvailability: resolvedExploit
+    exploitAvailability: resolvedExploit,
+    vulnerabilitySourceStatus: resolvedSourceStatus
   });
 }
 

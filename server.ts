@@ -49,33 +49,42 @@ import {
   listCampaigns,
   getCampaignById
 } from "./server/threatActorService";
+import {
+  initializeIntelligenceSources,
+  getAllDataSourcesStatus,
+  getIntelligenceFeedItems,
+  syncNvdIntelligence,
+  syncCisaKevIntelligence,
+  startBackgroundSyncScheduler
+} from "./server/intelligenceSyncService";
 
 const upload = multer({ storage: multer.memoryStorage() });
 
 async function seedDatabaseIfEmpty() {
   try {
     await initDatabaseTables();
+    await initializeIntelligenceSources();
+    
     let existingCount = 0;
     try {
       const existing = await db.select({ count: count() }).from(reports);
       existingCount = Number(existing[0]?.count || 0);
     } catch (queryErr: any) {
-      console.warn("[DB] Error reading reports, attempting recovery reset...", queryErr?.message);
-      resetDatabase();
-      await initDatabaseTables();
+      console.warn("[DB] Non-blocking warning reading reports count:", queryErr?.message);
       existingCount = 0;
     }
 
     if (existingCount === 0) {
-      console.log("Database is empty or newly recovered. Populating with synthetic CTI dataset...");
-      await populateSyntheticData();
+      console.log("[DB] Database is empty. Seeding baseline synthetic CTI dataset...");
+      await populateSyntheticData(false);
     } else {
-      // Ensure synthetic incidents have realistic 6-month historical spread for analytics
+      console.log(`[DB] Database verified with ${existingCount} reports. Preserving existing records.`);
+      // Normalize dates on startup if needed
       try {
         const existingIncidents = await db.query.incidents.findMany();
         for (let i = 0; i < existingIncidents.length; i++) {
           const inc: any = existingIncidents[i];
-          if (typeof inc?.id === "string" && inc.id.startsWith("inc-syn-")) {
+          if (typeof inc?.id === "string" && inc.id.startsWith("inc-syn-") && !inc.date) {
             const num = parseInt(inc.id.replace("inc-syn-", ""), 10) || (i + 1);
             const daysAgo = num <= 6 ? ((num - 1) * 0.4) : (3 + (num - 7) * 4.8);
             const newDate = new Date(Date.now() - 1000 * 60 * 60 * 24 * daysAgo).toISOString();
@@ -83,69 +92,171 @@ async function seedDatabaseIfEmpty() {
           }
         }
       } catch (e) {
-        console.warn("[DB] Non-blocking notice during incident date normalization:", e);
+        console.warn("[DB] Non-blocking notice during incident date check:", e);
       }
     }
   } catch (err) {
-    console.error("Database seed check critical error:", err);
-    try {
-      resetDatabase();
-      await initDatabaseTables();
-      await populateSyntheticData();
-    } catch (reSeedErr) {
-      console.error("Failed emergency reseed:", reSeedErr);
-    }
+    console.error("[DB] Critical error during database startup initialization:", err);
   }
 }
 
-async function populateSyntheticData() {
+async function populateSyntheticData(forceClear = false) {
   const data = generateSyntheticCTIDatabase();
 
-  // Clear existing
-  try {
-    await db.delete(campaignMitreTechniques);
-    await db.delete(campaignIncidents);
-    await db.delete(campaignIocs);
-    await db.delete(campaignThreats);
-    await db.delete(threatActorIncidents);
-    await db.delete(threatActorIocs);
-    await db.delete(threatActorThreats);
-    await db.delete(campaigns);
-    await db.delete(threatActors);
-    await db.delete(analystNotes);
-    await db.delete(recommendations);
-    await db.delete(incidents);
-    await db.delete(iocs);
-    await db.delete(entities);
-    await db.delete(threats);
-    await db.delete(predictions);
-    await db.delete(reports);
-    await db.delete(assets);
-  } catch (e) {
-    // Ignore clear errors if tables were just initialized
+  if (forceClear) {
+    console.log("[DB] Force clearing tables for manual reset...");
+    try {
+      await db.delete(campaignMitreTechniques);
+      await db.delete(campaignIncidents);
+      await db.delete(campaignIocs);
+      await db.delete(campaignThreats);
+      await db.delete(threatActorIncidents);
+      await db.delete(threatActorIocs);
+      await db.delete(threatActorThreats);
+      await db.delete(campaigns);
+      await db.delete(threatActors);
+      await db.delete(analystNotes);
+      await db.delete(recommendations);
+      await db.delete(incidents);
+      await db.delete(iocs);
+      await db.delete(entities);
+      await db.delete(threats);
+      await db.delete(predictions);
+      await db.delete(reports);
+      await db.delete(assets);
+    } catch (e: any) {
+      console.warn("[DB] Notice during table clear:", e?.message);
+    }
   }
 
-  // Insert sequentially
-  if (data.reports.length > 0) await db.insert(reports).values(data.reports);
-  if (data.threats.length > 0) await db.insert(threats).values(data.threats);
-  if (data.recommendations.length > 0) await db.insert(recommendations).values(data.recommendations);
-  if (data.entities.length > 0) await db.insert(entities).values(data.entities);
-  if (data.iocs.length > 0) await db.insert(iocs).values(data.iocs);
-  if (data.incidents.length > 0) await db.insert(incidents).values(data.incidents);
-  if (data.predictions.length > 0) await db.insert(predictions).values(data.predictions);
-  if (data.analystNotes.length > 0) await db.insert(analystNotes).values(data.analystNotes);
-  if (data.assets && data.assets.length > 0) await db.insert(assets).values(data.assets);
-  if (data.threatActors && data.threatActors.length > 0) await db.insert(threatActors).values(data.threatActors);
-  if (data.campaigns && data.campaigns.length > 0) await db.insert(campaigns).values(data.campaigns);
-  if (data.threatActorThreats && data.threatActorThreats.length > 0) await db.insert(threatActorThreats).values(data.threatActorThreats);
-  if (data.threatActorIocs && data.threatActorIocs.length > 0) await db.insert(threatActorIocs).values(data.threatActorIocs);
-  if (data.threatActorIncidents && data.threatActorIncidents.length > 0) await db.insert(threatActorIncidents).values(data.threatActorIncidents);
-  if (data.campaignThreats && data.campaignThreats.length > 0) await db.insert(campaignThreats).values(data.campaignThreats);
-  if (data.campaignIocs && data.campaignIocs.length > 0) await db.insert(campaignIocs).values(data.campaignIocs);
-  if (data.campaignIncidents && data.campaignIncidents.length > 0) await db.insert(campaignIncidents).values(data.campaignIncidents);
-  if (data.campaignMitreTechniques && data.campaignMitreTechniques.length > 0) await db.insert(campaignMitreTechniques).values(data.campaignMitreTechniques);
+  // Safe insertions
+  try {
+    const rCount = await db.select({ count: count() }).from(reports);
+    if (forceClear || Number(rCount[0]?.count || 0) === 0) {
+      if (data.reports.length > 0) await db.insert(reports).values(data.reports);
+    }
+  } catch (e: any) { console.warn("[DB] Insert reports error:", e?.message); }
 
-  console.log(`Seeding complete: ${data.reports.length} reports, ${data.threats.length} threats, ${data.iocs.length} IOCs, ${data.incidents.length} incidents, ${data.assets?.length || 0} assets, ${data.threatActors?.length || 0} threat actors, ${data.campaigns?.length || 0} campaigns.`);
+  try {
+    const tCount = await db.select({ count: count() }).from(threats);
+    if (forceClear || Number(tCount[0]?.count || 0) === 0) {
+      if (data.threats.length > 0) await db.insert(threats).values(data.threats);
+    }
+  } catch (e: any) { console.warn("[DB] Insert threats error:", e?.message); }
+
+  try {
+    const recCount = await db.select({ count: count() }).from(recommendations);
+    if (forceClear || Number(recCount[0]?.count || 0) === 0) {
+      if (data.recommendations.length > 0) await db.insert(recommendations).values(data.recommendations);
+    }
+  } catch (e: any) { console.warn("[DB] Insert recommendations error:", e?.message); }
+
+  try {
+    const entCount = await db.select({ count: count() }).from(entities);
+    if (forceClear || Number(entCount[0]?.count || 0) === 0) {
+      if (data.entities.length > 0) await db.insert(entities).values(data.entities);
+    }
+  } catch (e: any) { console.warn("[DB] Insert entities error:", e?.message); }
+
+  try {
+    const iocCnt = await db.select({ count: count() }).from(iocs);
+    if (forceClear || Number(iocCnt[0]?.count || 0) === 0) {
+      if (data.iocs.length > 0) await db.insert(iocs).values(data.iocs);
+    }
+  } catch (e: any) { console.warn("[DB] Insert iocs error:", e?.message); }
+
+  try {
+    const incCnt = await db.select({ count: count() }).from(incidents);
+    if (forceClear || Number(incCnt[0]?.count || 0) === 0) {
+      if (data.incidents.length > 0) await db.insert(incidents).values(data.incidents);
+    }
+  } catch (e: any) { console.warn("[DB] Insert incidents error:", e?.message); }
+
+  try {
+    const predCnt = await db.select({ count: count() }).from(predictions);
+    if (forceClear || Number(predCnt[0]?.count || 0) === 0) {
+      if (data.predictions.length > 0) await db.insert(predictions).values(data.predictions);
+    }
+  } catch (e: any) { console.warn("[DB] Insert predictions error:", e?.message); }
+
+  try {
+    const noteCnt = await db.select({ count: count() }).from(analystNotes);
+    if (forceClear || Number(noteCnt[0]?.count || 0) === 0) {
+      if (data.analystNotes.length > 0) await db.insert(analystNotes).values(data.analystNotes);
+    }
+  } catch (e: any) { console.warn("[DB] Insert analystNotes error:", e?.message); }
+
+  try {
+    const assetCnt = await db.select({ count: count() }).from(assets);
+    if (forceClear || Number(assetCnt[0]?.count || 0) === 0) {
+      if (data.assets && data.assets.length > 0) await db.insert(assets).values(data.assets);
+    }
+  } catch (e: any) { console.warn("[DB] Insert assets error:", e?.message); }
+
+  try {
+    const taCnt = await db.select({ count: count() }).from(threatActors);
+    if (forceClear || Number(taCnt[0]?.count || 0) === 0) {
+      if (data.threatActors && data.threatActors.length > 0) await db.insert(threatActors).values(data.threatActors);
+    }
+  } catch (e: any) { console.warn("[DB] Insert threatActors error:", e?.message); }
+
+  try {
+    const cmpCnt = await db.select({ count: count() }).from(campaigns);
+    if (forceClear || Number(cmpCnt[0]?.count || 0) === 0) {
+      if (data.campaigns && data.campaigns.length > 0) await db.insert(campaigns).values(data.campaigns);
+    }
+  } catch (e: any) { console.warn("[DB] Insert campaigns error:", e?.message); }
+
+  try {
+    const tatCnt = await db.select({ count: count() }).from(threatActorThreats);
+    if (forceClear || Number(tatCnt[0]?.count || 0) === 0) {
+      if (data.threatActorThreats && data.threatActorThreats.length > 0) await db.insert(threatActorThreats).values(data.threatActorThreats);
+    }
+  } catch (e: any) { console.warn("[DB] Insert threatActorThreats error:", e?.message); }
+
+  try {
+    const taiCnt = await db.select({ count: count() }).from(threatActorIocs);
+    if (forceClear || Number(taiCnt[0]?.count || 0) === 0) {
+      if (data.threatActorIocs && data.threatActorIocs.length > 0) await db.insert(threatActorIocs).values(data.threatActorIocs);
+    }
+  } catch (e: any) { console.warn("[DB] Insert threatActorIocs error:", e?.message); }
+
+  try {
+    const taincCnt = await db.select({ count: count() }).from(threatActorIncidents);
+    if (forceClear || Number(taincCnt[0]?.count || 0) === 0) {
+      if (data.threatActorIncidents && data.threatActorIncidents.length > 0) await db.insert(threatActorIncidents).values(data.threatActorIncidents);
+    }
+  } catch (e: any) { console.warn("[DB] Insert threatActorIncidents error:", e?.message); }
+
+  try {
+    const cthCnt = await db.select({ count: count() }).from(campaignThreats);
+    if (forceClear || Number(cthCnt[0]?.count || 0) === 0) {
+      if (data.campaignThreats && data.campaignThreats.length > 0) await db.insert(campaignThreats).values(data.campaignThreats);
+    }
+  } catch (e: any) { console.warn("[DB] Insert campaignThreats error:", e?.message); }
+
+  try {
+    const ciocCnt = await db.select({ count: count() }).from(campaignIocs);
+    if (forceClear || Number(ciocCnt[0]?.count || 0) === 0) {
+      if (data.campaignIocs && data.campaignIocs.length > 0) await db.insert(campaignIocs).values(data.campaignIocs);
+    }
+  } catch (e: any) { console.warn("[DB] Insert campaignIocs error:", e?.message); }
+
+  try {
+    const cincCnt = await db.select({ count: count() }).from(campaignIncidents);
+    if (forceClear || Number(cincCnt[0]?.count || 0) === 0) {
+      if (data.campaignIncidents && data.campaignIncidents.length > 0) await db.insert(campaignIncidents).values(data.campaignIncidents);
+    }
+  } catch (e: any) { console.warn("[DB] Insert campaignIncidents error:", e?.message); }
+
+  try {
+    const cmtCnt = await db.select({ count: count() }).from(campaignMitreTechniques);
+    if (forceClear || Number(cmtCnt[0]?.count || 0) === 0) {
+      if (data.campaignMitreTechniques && data.campaignMitreTechniques.length > 0) await db.insert(campaignMitreTechniques).values(data.campaignMitreTechniques);
+    }
+  } catch (e: any) { console.warn("[DB] Insert campaignMitreTechniques error:", e?.message); }
+
+  console.log(`[DB] Seeding verification complete: Baseline initialized.`);
 }
 
 async function startServer() {
@@ -174,7 +285,7 @@ async function startServer() {
   // Reset database endpoint
   app.post("/api/reset-data", async (req, res) => {
     try {
-      await populateSyntheticData();
+      await populateSyntheticData(true);
       res.json({ success: true, message: "Database reset to pristine synthetic CTI baseline." });
     } catch (e: any) {
       res.status(500).json({ error: "Failed to reset dataset: " + e.message });
@@ -739,6 +850,17 @@ async function startServer() {
       res.json({ success: true });
     } catch (e) {
       res.status(500).json({ error: "Failed to update threat" });
+    }
+  });
+
+  app.patch("/api/threats/:id/status", async (req, res) => {
+    try {
+      const { status } = req.body;
+      if (!status) return res.status(400).json({ error: "Status is required." });
+      await db.update(threats).set({ status }).where(eq(threats.id, req.params.id));
+      res.json({ success: true, status });
+    } catch (e) {
+      res.status(500).json({ error: "Failed to update threat status" });
     }
   });
 
@@ -1924,69 +2046,70 @@ async function startServer() {
   });
 
   // ==========================================
-  // Data Sources Health & Telemetry Status
+  // Data Sources Health & Telemetry Status (Hybrid CTI Architecture)
   // ==========================================
-  app.get("/api/datasources/status", (req, res) => {
-    const hasGemini = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_KEY");
-    res.json({
-      sources: [
-        {
-          id: "gemini",
-          name: "Google Gemini 3.7 Flash AI",
-          status: hasGemini ? "Connected" : "Demo AI Mode",
-          category: "AI Engine",
-          description: "AI-generated analysis based on available ShieldZen intelligence.",
-          latency: hasGemini ? "380ms" : "12ms (Local)",
-          isVerified: true
-        },
-        {
-          id: "nvd",
-          name: "NIST National Vulnerability Database (NVD)",
-          status: "Connected",
-          category: "Vulnerability Catalog",
-          description: "National Vulnerability Database — public vulnerability intelligence with live CVE lookup and cached fallback data.",
-          latency: "120ms",
-          isVerified: true
-        },
-        {
-          id: "cisa_kev",
-          name: "CISA Known Exploited Vulnerabilities (KEV)",
-          status: "Connected",
-          category: "Exploitation Catalog",
-          description: "Cybersecurity and Infrastructure Security Agency Known Exploited Vulnerabilities catalog with periodic synchronization and cached fallback data.",
-          latency: "95ms",
-          isVerified: true
-        },
-        {
-          id: "mitre",
-          name: "MITRE ATT&CK Enterprise Matrix v15",
-          status: "Connected",
-          category: "Adversary TTPs",
-          description: "MITRE ATT&CK technique knowledge base used for threat correlation and analysis.",
-          latency: "5ms (In-Memory)",
-          isVerified: true
-        },
-        {
-          id: "reports",
-          name: "Uploaded Intelligence Reports",
-          status: "Active",
-          category: "Analyst Submissions",
-          description: "Analyst-uploaded intelligence reports processed by ShieldZen AI.",
-          latency: "5ms",
-          isVerified: true
-        },
-        {
-          id: "synthetic",
-          name: "ShieldZen Synthetic CTI Pipeline",
-          status: "Active",
-          category: "Simulation & Baseline",
-          description: "Deterministic synthetic scenario dataset for academic demonstration.",
-          latency: "2ms",
-          isVerified: false
-        }
-      ],
-      lastSync: new Date().toISOString()
-    });
+  app.get("/api/datasources/status", async (req, res) => {
+    try {
+      const statusData = await getAllDataSourcesStatus();
+      res.json(statusData);
+    } catch (e: any) {
+      console.error("[DataSources] Error getting status:", e);
+      res.status(500).json({ error: "Failed to fetch data source statuses: " + e.message });
+    }
+  });
+
+  // Manual Intelligence Synchronization Trigger
+  app.post("/api/datasources/:sourceId/sync", async (req, res) => {
+    try {
+      const { sourceId } = req.params;
+      let result;
+
+      if (sourceId === "nvd") {
+        result = await syncNvdIntelligence();
+      } else if (sourceId === "cisa_kev") {
+        result = await syncCisaKevIntelligence();
+      } else if (sourceId === "mitre" || sourceId === "gemini_ai" || sourceId === "synthetic_cti" || sourceId === "analyst_uploads") {
+        // Refresh metadata
+        result = {
+          success: true,
+          recordsUpdated: 0,
+          durationMs: 15,
+          status: sourceId === "synthetic_cti" ? "SYNTHETIC" : "CACHED"
+        };
+      } else {
+        return res.status(400).json({ error: `Unknown data source '${sourceId}'.` });
+      }
+
+      res.json({
+        sourceId,
+        ...result,
+        message: result.success
+          ? `Successfully synchronized ${sourceId.toUpperCase()} intelligence feed.`
+          : `Sync completed with warning (${result.error}). Served local cached catalog.`
+      });
+    } catch (e: any) {
+      console.error("[DataSources] Sync error:", e);
+      res.status(500).json({ error: "Failed to trigger synchronization: " + e.message });
+    }
+  });
+
+  // Searchable Unified External Intelligence Feed (NVD + CISA KEV)
+  app.get("/api/datasources/feed", async (req, res) => {
+    try {
+      const { source, severity, isKevOnly, search, limit, offset } = req.query;
+      const feed = await getIntelligenceFeedItems({
+        source: source as string,
+        severity: severity as string,
+        isKevOnly: isKevOnly === "true" || isKevOnly === "1",
+        search: search as string,
+        limit: limit ? parseInt(limit as string, 10) : 50,
+        offset: offset ? parseInt(offset as string, 10) : 0
+      });
+      res.json(feed);
+    } catch (e: any) {
+      console.error("[DataSources] Feed error:", e);
+      res.status(500).json({ error: "Failed to fetch intelligence feed: " + e.message });
+    }
   });
 
   // ==========================================
@@ -2100,6 +2223,7 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`ShieldZen Server running on http://localhost:${PORT}`);
+    startBackgroundSyncScheduler();
   });
 }
 

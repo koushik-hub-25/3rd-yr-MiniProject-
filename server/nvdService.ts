@@ -11,6 +11,7 @@ export interface NvdVulnerability {
   references: string[];
   source: string;
   isCached?: boolean;
+  sourceStatus?: "LIVE" | "CACHED" | "SYNTHETIC";
 }
 
 // Resilient in-memory cache for NVD queries to prevent excessive API load and rate limits
@@ -218,12 +219,12 @@ export async function fetchNvdCve(cveId: string): Promise<NvdVulnerability | nul
   // Check cache first
   const cached = nvdCache.get(normalizedId);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-    return { ...cached.data, isCached: true };
+    return { ...cached.data, isCached: true, sourceStatus: cached.data.sourceStatus || "CACHED" };
   }
 
   // Check verified preloaded catalog
   if (VERIFIED_NVD_CATALOG[normalizedId]) {
-    const data = VERIFIED_NVD_CATALOG[normalizedId];
+    const data = { ...VERIFIED_NVD_CATALOG[normalizedId], sourceStatus: "CACHED" as const };
     nvdCache.set(normalizedId, { data, timestamp: Date.now() });
     return data;
   }
@@ -272,7 +273,8 @@ export async function fetchNvdCve(cveId: string): Promise<NvdVulnerability | nul
           affectedProducts: affectedProducts.length > 0 ? affectedProducts : ["Enterprise Systems"],
           cwe,
           references,
-          source: "NIST National Vulnerability Database (Live NVD API 2.0)"
+          source: "NIST National Vulnerability Database (Live NVD API 2.0)",
+          sourceStatus: "LIVE"
         };
 
         nvdCache.set(normalizedId, { data: result, timestamp: Date.now() });
@@ -295,7 +297,8 @@ export async function fetchNvdCve(cveId: string): Promise<NvdVulnerability | nul
     affectedProducts: ["Monitored Infrastructure Components"],
     cwe: "CWE-20: Improper Input Validation",
     references: [`https://nvd.nist.gov/vuln/detail/${normalizedId}`],
-    source: "ShieldZen NVD Cache & Synthesis"
+    source: "ShieldZen NVD Cache & Synthesis",
+    sourceStatus: "SYNTHETIC"
   };
 
   return syntheticFallback;

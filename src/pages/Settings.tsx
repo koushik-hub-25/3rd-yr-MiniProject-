@@ -2,17 +2,61 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import {
   User, Cpu, Database, Radio, Shield, Bell, Key, RefreshCw, CheckCircle2,
-  AlertTriangle, Server, Lock, ExternalLink, HardDrive, Info
+  AlertTriangle, Server, Lock, ExternalLink, HardDrive, Info, Globe, Clock,
+  ArrowDownCircle, Search, Filter, Flame, Layers, ShieldCheck, Zap
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent, Badge, cn } from "../components/ui";
+import { IntelligenceSourceInfo, IntelligenceFeedItem } from "../types";
 
 export default function Settings() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<"profile" | "ai" | "sources" | "alerts" | "system">("profile");
-  const [dataSources, setDataSources] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<"profile" | "ai" | "sources" | "feed" | "alerts" | "system">("sources");
+  const [dataSources, setDataSources] = useState<IntelligenceSourceInfo[]>([]);
+  const [lastSystemSync, setLastSystemSync] = useState<string>("");
   const [config, setConfig] = useState<any>(null);
   const [resetting, setResetting] = useState(false);
   const [resetMessage, setResetMessage] = useState<string | null>(null);
+
+  // Syncing state per source
+  const [syncingSource, setSyncingSource] = useState<string | null>(null);
+  const [syncNotification, setSyncNotification] = useState<{ source: string; message: string; isError?: boolean } | null>(null);
+
+  // Feed Explorer State
+  const [feedItems, setFeedItems] = useState<IntelligenceFeedItem[]>([]);
+  const [feedLoading, setFeedLoading] = useState(false);
+  const [feedSearch, setFeedSearch] = useState("");
+  const [feedSourceFilter, setFeedSourceFilter] = useState("ALL");
+  const [feedKevOnly, setFeedKevOnly] = useState(false);
+  const [selectedFeedItem, setSelectedFeedItem] = useState<IntelligenceFeedItem | null>(null);
+
+  const fetchSourceStatus = () => {
+    fetch("/api/datasources/status")
+      .then(res => res.json())
+      .then(data => {
+        if (data.sources) {
+          setDataSources(data.sources);
+          setLastSystemSync(data.lastSync || new Date().toISOString());
+        }
+      })
+      .catch(() => {});
+  };
+
+  const fetchFeed = () => {
+    setFeedLoading(true);
+    const params = new URLSearchParams();
+    if (feedSourceFilter !== "ALL") params.append("source", feedSourceFilter);
+    if (feedKevOnly) params.append("isKevOnly", "true");
+    if (feedSearch.trim()) params.append("search", feedSearch.trim());
+    params.append("limit", "40");
+
+    fetch(`/api/datasources/feed?${params.toString()}`)
+      .then(res => res.json())
+      .then(data => {
+        setFeedItems(Array.isArray(data) ? data : []);
+      })
+      .catch(err => console.error("Error loading feed:", err))
+      .finally(() => setFeedLoading(false));
+  };
 
   useEffect(() => {
     fetch("/api/config")
@@ -20,11 +64,45 @@ export default function Settings() {
       .then(data => setConfig(data))
       .catch(() => {});
 
-    fetch("/api/datasources/status")
-      .then(res => res.json())
-      .then(data => setDataSources(data.sources || []))
-      .catch(() => {});
+    fetchSourceStatus();
   }, []);
+
+  useEffect(() => {
+    if (activeTab === "feed") {
+      fetchFeed();
+    }
+  }, [activeTab, feedSourceFilter, feedKevOnly]);
+
+  const handleSyncSource = async (sourceId: string) => {
+    setSyncingSource(sourceId);
+    setSyncNotification(null);
+    try {
+      const res = await fetch(`/api/datasources/${sourceId}/sync`, { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        setSyncNotification({
+          source: sourceId,
+          message: data.message || `Successfully synced ${sourceId.toUpperCase()}`
+        });
+        fetchSourceStatus();
+        if (activeTab === "feed") fetchFeed();
+      } else {
+        setSyncNotification({
+          source: sourceId,
+          message: data.error || `Sync failed for ${sourceId}`,
+          isError: true
+        });
+      }
+    } catch (e: any) {
+      setSyncNotification({
+        source: sourceId,
+        message: `Network error during sync: ${e.message}`,
+        isError: true
+      });
+    } finally {
+      setSyncingSource(null);
+    }
+  };
 
   const handleResetData = async () => {
     setResetting(true);
@@ -34,6 +112,7 @@ export default function Settings() {
       const data = await res.json();
       if (data.success) {
         setResetMessage("Successfully reset CTI database to verified synthetic baseline.");
+        fetchSourceStatus();
       } else {
         setResetMessage("Failed to reset: " + data.error);
       }
@@ -44,23 +123,80 @@ export default function Settings() {
     }
   };
 
+  const getFreshnessBadge = (label: string) => {
+    switch (label) {
+      case "LIVE":
+        return <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />LIVE</span>;
+      case "RECENT":
+        return <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-500/10 text-blue-400 border border-blue-500/30">RECENT CACHE</span>;
+      case "STALE":
+        return <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">STALE</span>;
+      case "OUTDATED":
+        return <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500/10 text-rose-400 border border-rose-500/30">OUTDATED</span>;
+      case "SYNTHETIC":
+        return <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-500/10 text-purple-400 border border-purple-500/30">SYNTHETIC</span>;
+      default:
+        return <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-500/10 text-slate-400 border border-slate-500/30">{label}</span>;
+    }
+  };
+
   const tabs = [
-    { id: "profile", label: "Analyst Profile", icon: User },
+    { id: "sources", label: "Data Sources & Provenance", icon: Database },
+    { id: "feed", label: "Live Threat Feeds (NVD & KEV)", icon: Globe },
     { id: "ai", label: "AI Engine Configuration", icon: Cpu },
-    { id: "sources", label: "Data Source Integrations", icon: Database },
-    { id: "alerts", label: "Alerting & Notifications", icon: Bell },
-    { id: "system", label: "System Integrity & Baseline", icon: Server }
+    { id: "profile", label: "Analyst Profile", icon: User },
+    { id: "alerts", label: "Alerting & Policies", icon: Bell },
+    { id: "system", label: "System Baseline & Recovery", icon: Server }
   ];
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto">
+    <div className="space-y-6 max-w-6xl mx-auto">
       {/* Header */}
-      <div className="pb-2 border-b border-slate-800/80">
-        <h1 className="text-xl font-extrabold text-white tracking-tight">Platform Configuration & Settings</h1>
-        <p className="text-xs text-slate-400 mt-1">
-          Manage analyst credentials, AI engine parameters, threat feed integrations, and academic prototype controls.
-        </p>
+      <div className="pb-3 border-b border-slate-800/80 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-extrabold text-white tracking-tight flex items-center gap-2.5">
+            <ShieldCheck className="w-5 h-5 text-cyan-400" />
+            Intelligence Architecture & Provenance Settings
+          </h1>
+          <p className="text-xs text-slate-400 mt-1">
+            Hybrid CTI feed orchestration, live NIST NVD & CISA KEV synchronization, and deterministic risk data provenance.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              fetchSourceStatus();
+              if (activeTab === "feed") fetchFeed();
+            }}
+            className="px-3 py-1.5 bg-slate-900/80 hover:bg-slate-800 text-cyan-400 border border-slate-700 rounded-xl text-xs font-mono font-semibold transition-all flex items-center gap-1.5"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Refresh Telemetry
+          </button>
+        </div>
       </div>
+
+      {/* Sync Notification Banner */}
+      {syncNotification && (
+        <div className={cn(
+          "p-3.5 rounded-xl border flex items-center justify-between gap-3 text-xs font-mono animate-in fade-in slide-in-from-top-1",
+          syncNotification.isError
+            ? "bg-rose-950/40 border-rose-500/40 text-rose-300"
+            : "bg-emerald-950/40 border-emerald-500/40 text-emerald-300"
+        )}>
+          <div className="flex items-center gap-2">
+            {syncNotification.isError ? <AlertTriangle className="w-4 h-4 text-rose-400" /> : <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+            <span>{syncNotification.message}</span>
+          </div>
+          <button
+            onClick={() => setSyncNotification(null)}
+            className="text-slate-400 hover:text-white text-xs px-2"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex items-center gap-1.5 border-b border-slate-800/80 pb-2 overflow-x-auto">
@@ -85,43 +221,280 @@ export default function Settings() {
         })}
       </div>
 
-      {/* Tab Contents */}
-      {activeTab === "profile" && (
-        <Card>
-          <CardHeader>
-            <CardTitle><User className="w-4 h-4 text-cyan-400" /> Analyst Identity & Role</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center gap-4 p-4 rounded-xl bg-[#070B14] border border-slate-800">
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-cyan-600 to-blue-700 flex items-center justify-center text-white font-extrabold text-lg shadow-lg shadow-cyan-950/50">
-                {user?.avatarInitials || "AM"}
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-white">{user?.name || "Alex Morgan"}</h3>
-                <p className="text-xs text-cyan-400 font-mono">{user?.email || "alex.morgan@shieldzen.sec"}</p>
-                <div className="flex items-center gap-2 mt-1.5">
-                  <Badge variant="cyan">{user?.role || "Senior Security Analyst"}</Badge>
-                  <span className="text-[11px] text-slate-400 font-mono">{user?.clearance || "SOC Tier-2"}</span>
+      {/* Tab: Data Sources & Provenance */}
+      {activeTab === "sources" && (
+        <div className="space-y-6">
+          {/* Hybrid Architecture Overview Banner */}
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-cyan-950/40 via-blue-950/30 to-slate-950/60 border border-cyan-500/30">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono font-bold uppercase tracking-wider text-cyan-400 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-500/30">
+                    Hybrid CTI Architecture
+                  </span>
+                  <span className="text-xs text-slate-400">• Last Global Check: {new Date(lastSystemSync).toLocaleTimeString()}</span>
                 </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-3.5 rounded-xl bg-[#070B14] border border-slate-800 space-y-1">
-                <span className="text-[10px] uppercase font-bold text-slate-500 font-mono">Platform Identity ID</span>
-                <p className="text-xs font-mono text-slate-200">{user?.id || "usr-alex-morgan"}</p>
-              </div>
-              <div className="p-3.5 rounded-xl bg-[#070B14] border border-slate-800 space-y-1">
-                <span className="text-[10px] uppercase font-bold text-slate-500 font-mono">Authentication Status</span>
-                <p className="text-xs font-mono text-emerald-400 flex items-center gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> Active Enterprise Session
+                <h3 className="text-sm font-bold text-white">Dual Live-API & Cached Fallback Engine</h3>
+                <p className="text-xs text-slate-300 max-w-3xl leading-relaxed">
+                  ShieldZen implements a resilient threat intelligence pipeline: live CVE lookups from NIST NVD and real-time active exploitation tracking via CISA KEV, coupled with deterministic offline catalogs and synthetic telemetry for sandboxed academic analysis.
                 </p>
               </div>
+
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button
+                  onClick={() => handleSyncSource("nvd")}
+                  disabled={syncingSource === "nvd"}
+                  className="px-3.5 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-cyan-950 flex items-center gap-2 disabled:opacity-50"
+                >
+                  <RefreshCw className={cn("w-3.5 h-3.5", syncingSource === "nvd" && "animate-spin")} />
+                  <span>{syncingSource === "nvd" ? "Syncing NVD..." : "Sync NIST NVD"}</span>
+                </button>
+                <button
+                  onClick={() => handleSyncSource("cisa_kev")}
+                  disabled={syncingSource === "cisa_kev"}
+                  className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-blue-950 flex items-center gap-2 disabled:opacity-50"
+                >
+                  <RefreshCw className={cn("w-3.5 h-3.5", syncingSource === "cisa_kev" && "animate-spin")} />
+                  <span>{syncingSource === "cisa_kev" ? "Syncing KEV..." : "Sync CISA KEV"}</span>
+                </button>
+              </div>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+
+          {/* Sources Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {dataSources.map((source) => {
+              const isSyncing = syncingSource === source.id;
+              const canManualSync = source.id === "nvd" || source.id === "cisa_kev";
+
+              return (
+                <div
+                  key={source.id}
+                  className="p-4 rounded-2xl bg-[#070B14] border border-slate-800/80 hover:border-slate-700 transition-all flex flex-col justify-between space-y-4"
+                >
+                  <div>
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-bold text-white tracking-tight">{source.name}</h4>
+                        </div>
+                        <span className="text-[10px] font-mono text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-500/20 mt-1 inline-block">
+                          {source.sourceType.replace("_", " ")}
+                        </span>
+                      </div>
+                      <div className="flex flex-col items-end gap-1">
+                        {getFreshnessBadge(source.freshnessLabel)}
+                        <span className="text-[10px] font-mono text-slate-400">
+                          {source.syncDurationMs}ms latency
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-slate-300 leading-relaxed mb-3">
+                      {source.description}
+                    </p>
+
+                    {/* Metadata Specs */}
+                    <div className="grid grid-cols-2 gap-2 p-2.5 rounded-xl bg-slate-900/50 border border-slate-800 text-[11px] font-mono">
+                      <div>
+                        <span className="text-slate-500 block text-[10px] uppercase">Catalog Volume</span>
+                        <span className="text-slate-200 font-bold">{source.recordCount.toLocaleString()} Entries</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[10px] uppercase">Sync Cadence</span>
+                        <span className="text-slate-200">Every {source.syncIntervalMinutes}m</span>
+                      </div>
+                      <div className="col-span-2 pt-1 border-t border-slate-800/60">
+                        <span className="text-slate-500 block text-[10px] uppercase">Last Synchronization</span>
+                        <span className="text-cyan-400">
+                          {source.lastSuccessfulSync ? new Date(source.lastSuccessfulSync).toLocaleString() : "Initialization Cached"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between">
+                    <span className="text-[10px] font-mono text-slate-500">
+                      {source.isSynthetic ? "Synthetic CTI" : "Verified Feed"}
+                    </span>
+
+                    {canManualSync ? (
+                      <button
+                        onClick={() => handleSyncSource(source.id)}
+                        disabled={isSyncing}
+                        className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 rounded-lg text-xs font-mono font-bold transition-all flex items-center gap-1.5 disabled:opacity-50"
+                      >
+                        <RefreshCw className={cn("w-3 h-3", isSyncing && "animate-spin")} />
+                        <span>{isSyncing ? "Syncing..." : "Manual Sync"}</span>
+                      </button>
+                    ) : (
+                      <span className="text-[10px] font-mono text-emerald-400/80 bg-emerald-950/30 px-2 py-0.5 rounded border border-emerald-500/20">
+                        Always Available
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
 
+      {/* Tab: Threat Feeds Explorer */}
+      {activeTab === "feed" && (
+        <div className="space-y-4">
+          <div className="p-4 rounded-2xl bg-[#070B14] border border-slate-800 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Globe className="w-4 h-4 text-cyan-400" />
+                  Unified External Threat Intelligence Feed
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Search live and cached CVE records from NIST NVD and actively exploited vulnerabilities from CISA KEV.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={fetchFeed}
+                  disabled={feedLoading}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-xl text-xs font-mono font-bold border border-cyan-500/30 flex items-center gap-1.5"
+                >
+                  <RefreshCw className={cn("w-3 h-3", feedLoading && "animate-spin")} />
+                  <span>Reload Feed</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Filter Bar */}
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 pt-2">
+              <div className="sm:col-span-6 relative">
+                <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search CVE ID (e.g. CVE-2023-38606), vendor, product, or keyword..."
+                  value={feedSearch}
+                  onChange={(e) => setFeedSearch(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && fetchFeed()}
+                  className="w-full pl-9 pr-3 py-2 bg-slate-900/80 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <div className="sm:col-span-3">
+                <select
+                  value={feedSourceFilter}
+                  onChange={(e) => setFeedSourceFilter(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-900/80 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-500 font-mono"
+                >
+                  <option value="ALL">All Catalogs (NVD & KEV)</option>
+                  <option value="NVD">NIST NVD Only</option>
+                  <option value="CISA_KEV">CISA KEV Only</option>
+                </select>
+              </div>
+
+              <div className="sm:col-span-3 flex items-center">
+                <label className="flex items-center gap-2 px-3 py-2 bg-slate-900/80 border border-slate-700 rounded-xl text-xs text-slate-300 w-full cursor-pointer hover:bg-slate-800/80">
+                  <input
+                    type="checkbox"
+                    checked={feedKevOnly}
+                    onChange={(e) => setFeedKevOnly(e.target.checked)}
+                    className="w-4 h-4 accent-cyan-500"
+                  />
+                  <span className="font-bold text-red-400">CISA KEV Only</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* Feed Records Table */}
+          <div className="rounded-2xl border border-slate-800 bg-[#070B14] overflow-hidden">
+            <div className="p-3 border-b border-slate-800 bg-slate-900/30 flex items-center justify-between text-xs font-mono text-slate-400">
+              <span>Showing {feedItems.length} Intelligence Items</span>
+              <span>Sorted by Freshness & Criticality</span>
+            </div>
+
+            {feedLoading ? (
+              <div className="p-12 text-center text-slate-400 space-y-2 font-mono text-xs">
+                <RefreshCw className="w-5 h-5 animate-spin mx-auto text-cyan-400" />
+                <p>Loading threat intelligence feed from NVD & CISA KEV...</p>
+              </div>
+            ) : feedItems.length === 0 ? (
+              <div className="p-12 text-center text-slate-400 space-y-2">
+                <AlertTriangle className="w-6 h-6 mx-auto text-amber-400" />
+                <p className="text-xs">No intelligence records match the specified search or filter criteria.</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-800/60 max-h-[600px] overflow-y-auto">
+                {feedItems.map((item) => {
+                  const isCritical = item.cvssScore >= 9.0;
+                  const isHigh = item.cvssScore >= 7.0 && item.cvssScore < 9.0;
+
+                  return (
+                    <div
+                      key={item.id}
+                      onClick={() => setSelectedFeedItem(item)}
+                      className="p-4 hover:bg-slate-900/40 transition-colors cursor-pointer space-y-2"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="flex items-center gap-2.5 flex-wrap">
+                          <span className="text-xs font-extrabold font-mono text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-500/30">
+                            {item.cveId}
+                          </span>
+
+                          <span className={cn(
+                            "text-[10px] font-mono font-bold px-2 py-0.5 rounded border",
+                            isCritical
+                              ? "bg-red-500/10 text-red-400 border-red-500/30"
+                              : isHigh
+                              ? "bg-amber-500/10 text-amber-400 border-amber-500/30"
+                              : "bg-blue-500/10 text-blue-400 border-blue-500/30"
+                          )}>
+                            CVSS {item.cvssScore.toFixed(1)} {item.cvssSeverity}
+                          </span>
+
+                          {item.isCisaKev && (
+                            <span className="text-[10px] font-mono font-extrabold px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 flex items-center gap-1">
+                              <Flame className="w-3 h-3 text-rose-400" /> CISA KEV
+                            </span>
+                          )}
+
+                          {item.knownRansomwareUse === "Known" && (
+                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30">
+                              Ransomware
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-mono text-slate-400">
+                            {item.sourceName}
+                          </span>
+                          {getFreshnessBadge(item.freshnessLabel)}
+                        </div>
+                      </div>
+
+                      <p className="text-xs text-slate-300 leading-relaxed line-clamp-2">
+                        {item.description}
+                      </p>
+
+                      <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono pt-1">
+                        <div className="flex items-center gap-2">
+                          <span>Products: {item.affectedProducts.slice(0, 3).join(", ") || "General"}</span>
+                        </div>
+                        <span>Synced: {new Date(item.lastSyncedAt).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Tab: AI Engine */}
       {activeTab === "ai" && (
         <Card>
           <CardHeader>
@@ -173,40 +546,44 @@ export default function Settings() {
         </Card>
       )}
 
-      {activeTab === "sources" && (
+      {/* Tab: Profile */}
+      {activeTab === "profile" && (
         <Card>
           <CardHeader>
-            <CardTitle><Database className="w-4 h-4 text-cyan-400" /> Integrated Data Sources & Feeds</CardTitle>
+            <CardTitle><User className="w-4 h-4 text-cyan-400" /> Analyst Identity & Role</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
-            {dataSources.map((source) => (
-              <div key={source.id} className="p-3.5 rounded-xl bg-[#070B14] border border-slate-800 flex items-center justify-between gap-4">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <h4 className="text-xs font-bold text-white">{source.name}</h4>
-                    <span className="text-[10px] font-mono text-cyan-400 bg-cyan-950/60 px-1.5 py-0.2 rounded border border-cyan-500/20">
-                      {source.category}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-400">{source.description}</p>
-                </div>
-
-                <div className="flex items-center gap-3 flex-shrink-0">
-                  <div className="text-right font-mono text-[10px]">
-                    <span className="text-slate-500 block">LATENCY</span>
-                    <span className="text-slate-300">{source.latency}</span>
-                  </div>
-                  <span className="px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-emerald-950/70 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    {source.status}
-                  </span>
+          <CardContent className="space-y-4">
+            <div className="flex items-center gap-4 p-4 rounded-xl bg-[#070B14] border border-slate-800">
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-cyan-600 to-blue-700 flex items-center justify-center text-white font-extrabold text-lg shadow-lg shadow-cyan-950/50">
+                {user?.avatarInitials || "AM"}
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white">{user?.name || "Alex Morgan"}</h3>
+                <p className="text-xs text-cyan-400 font-mono">{user?.email || "alex.morgan@shieldzen.sec"}</p>
+                <div className="flex items-center gap-2 mt-1.5">
+                  <Badge variant="cyan">{user?.role || "Senior Security Analyst"}</Badge>
+                  <span className="text-[11px] text-slate-400 font-mono">{user?.clearance || "SOC Tier-2"}</span>
                 </div>
               </div>
-            ))}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-3.5 rounded-xl bg-[#070B14] border border-slate-800 space-y-1">
+                <span className="text-[10px] uppercase font-bold text-slate-500 font-mono">Platform Identity ID</span>
+                <p className="text-xs font-mono text-slate-200">{user?.id || "usr-alex-morgan"}</p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-[#070B14] border border-slate-800 space-y-1">
+                <span className="text-[10px] uppercase font-bold text-slate-500 font-mono">Authentication Status</span>
+                <p className="text-xs font-mono text-emerald-400 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Active Enterprise Session
+                </p>
+              </div>
+            </div>
           </CardContent>
         </Card>
       )}
 
+      {/* Tab: Alerts */}
       {activeTab === "alerts" && (
         <Card>
           <CardHeader>
@@ -242,6 +619,7 @@ export default function Settings() {
         </Card>
       )}
 
+      {/* Tab: System Baseline */}
       {activeTab === "system" && (
         <Card>
           <CardHeader>
@@ -282,6 +660,77 @@ export default function Settings() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* Modal Detail for Selected Feed Item */}
+      {selectedFeedItem && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#070B14] border border-slate-800 rounded-2xl max-w-2xl w-full p-6 space-y-4 shadow-2xl max-h-[85vh] overflow-y-auto">
+            <div className="flex items-start justify-between">
+              <div>
+                <span className="text-xs font-mono text-cyan-400 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-500/30">
+                  {selectedFeedItem.sourceName} • {selectedFeedItem.provider}
+                </span>
+                <h3 className="text-base font-bold text-white mt-1.5">{selectedFeedItem.cveId}</h3>
+              </div>
+              <button
+                onClick={() => setSelectedFeedItem(null)}
+                className="text-slate-400 hover:text-white text-xs px-2 py-1 bg-slate-900 rounded-lg border border-slate-800 font-mono"
+              >
+                Close (ESC)
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-bold font-mono px-2.5 py-1 rounded bg-purple-500/10 text-purple-400 border border-purple-500/30">
+                CVSS {selectedFeedItem.cvssScore.toFixed(1)} {selectedFeedItem.cvssSeverity}
+              </span>
+              {selectedFeedItem.isCisaKev && (
+                <span className="text-xs font-bold font-mono px-2.5 py-1 rounded bg-red-500/15 text-red-400 border border-red-500/30 flex items-center gap-1">
+                  <Flame className="w-3.5 h-3.5" /> Confirmed CISA KEV Exploitation
+                </span>
+              )}
+              {getFreshnessBadge(selectedFeedItem.freshnessLabel)}
+            </div>
+
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono">Vulnerability Description</h4>
+              <p className="text-xs text-slate-300 leading-relaxed bg-slate-900/60 p-3 rounded-xl border border-slate-800">
+                {selectedFeedItem.description}
+              </p>
+            </div>
+
+            {selectedFeedItem.isCisaKev && (
+              <div className="p-3.5 rounded-xl bg-rose-950/30 border border-rose-500/30 space-y-2 text-xs font-mono">
+                <span className="text-rose-400 font-bold uppercase block">CISA Directive & Remediation</span>
+                <p className="text-slate-300">{selectedFeedItem.cisaRequiredAction || "Apply vendor patch immediately according to BOD 22-01."}</p>
+                <div className="flex items-center gap-4 text-slate-400 pt-1">
+                  <span>Date Added: {selectedFeedItem.cisaDateAdded || "Recent"}</span>
+                  <span>Due Date: {selectedFeedItem.cisaDueDate || "Immediate"}</span>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-1 text-xs font-mono">
+              <span className="text-slate-400 uppercase text-[10px]">Affected Products</span>
+              <p className="text-slate-300 bg-slate-900/40 p-2 rounded-lg border border-slate-800/80">
+                {selectedFeedItem.affectedProducts.join(", ") || "General enterprise network components"}
+              </p>
+            </div>
+
+            <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
+              <span className="text-[10px] font-mono text-slate-500">
+                Synchronized at {new Date(selectedFeedItem.lastSyncedAt).toLocaleString()}
+              </span>
+              <button
+                onClick={() => setSelectedFeedItem(null)}
+                className="px-4 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-bold font-mono transition-all"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

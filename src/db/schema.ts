@@ -226,3 +226,46 @@ export const campaignMitreTechniques = sqliteTable("campaignMitreTechniques", {
   createdAt: integer("createdAt", { mode: "timestamp" }).notNull().default(sql`(strftime('%s', 'now'))`),
 });
 
+export const intelligenceSources = sqliteTable("intelligenceSources", {
+  id: text("id").primaryKey(), // 'nvd', 'cisa_kev', 'mitre', 'gemini_ai', 'analyst_uploads', 'synthetic_cti'
+  name: text("name").notNull(),
+  sourceType: text("sourceType").notNull(), // 'VULNERABILITY_FEED', 'EXPLOITATION_FEED', 'ADVERSARY_KNOWLEDGE_BASE', 'AI_ENGINE', 'ANALYST_INTEL', 'SYNTHETIC_DATASET'
+  provider: text("provider").notNull(), // 'NIST', 'CISA', 'MITRE', 'Google', 'Analyst', 'ShieldZen Academic'
+  endpoint: text("endpoint"),
+  status: text("status").notNull().default("CACHED"), // 'LIVE', 'CACHED', 'SYNTHETIC', 'DEGRADED', 'ERROR', 'DISCONNECTED'
+  lastSuccessfulSync: integer("lastSuccessfulSync", { mode: "timestamp" }),
+  lastAttemptedSync: integer("lastAttemptedSync", { mode: "timestamp" }),
+  nextScheduledSync: integer("nextScheduledSync", { mode: "timestamp" }),
+  recordCount: integer("recordCount").default(0),
+  errorMessage: text("errorMessage"),
+  syncDurationMs: integer("syncDurationMs").default(0),
+  isLive: integer("isLive").default(0), // 1 = Live connection, 0 = Cached/Offline
+  isSynthetic: integer("isSynthetic").default(0), // 1 = Synthetic simulation, 0 = Real feed
+  freshnessSeconds: integer("freshnessSeconds").default(0),
+  syncIntervalMinutes: integer("syncIntervalMinutes").default(30),
+  createdAt: integer("createdAt", { mode: "timestamp" }).notNull().default(sql`(strftime('%s', 'now'))`),
+  updatedAt: integer("updatedAt", { mode: "timestamp" }).notNull().default(sql`(strftime('%s', 'now'))`),
+});
+
+export const cachedVulnerabilities = sqliteTable("cachedVulnerabilities", {
+  cveId: text("cveId").primaryKey(),
+  source: text("source").notNull().default("NVD"), // 'NVD', 'CISA_KEV', 'HYBRID'
+  description: text("description").notNull(),
+  cvssScore: integer("cvssScore"), // Stored as * 10 or float representation
+  cvssSeverity: text("cvssSeverity").default("HIGH"), // 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'
+  cvssVector: text("cvssVector"),
+  cwe: text("cwe"),
+  publishedDate: text("publishedDate"),
+  lastModifiedDate: text("lastModifiedDate"),
+  affectedProducts: text("affectedProducts"), // JSON string array
+  references: text("references"), // JSON string array
+  isCisaKev: integer("isCisaKev").default(0), // 1 = in KEV, 0 = not in KEV
+  cisaDateAdded: text("cisaDateAdded"),
+  cisaDueDate: text("cisaDueDate"),
+  cisaRequiredAction: text("cisaRequiredAction"),
+  knownRansomwareUse: text("knownRansomwareUse").default("Unknown"), // 'Known', 'Unknown'
+  sourceStatus: text("sourceStatus").default("CACHED"), // 'LIVE', 'CACHED', 'SYNTHETIC'
+  lastSyncedAt: integer("lastSyncedAt", { mode: "timestamp" }).notNull().default(sql`(strftime('%s', 'now'))`),
+});
+
+

@@ -321,6 +321,8 @@ export interface Asset {
 
 export type RiskLevel = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
 
+export type IntelligenceSourceStatus = 'LIVE' | 'CACHED' | 'SYNTHETIC' | 'DEGRADED' | 'ERROR' | 'DISCONNECTED';
+
 export interface RiskFactor {
   name: string;
   value: string | number | boolean;
@@ -329,6 +331,10 @@ export interface RiskFactor {
   weightPercentage: number;
   category: 'VULNERABILITY' | 'EXPLOITATION' | 'ASSET_IMPACT' | 'THREAT_INTEL';
   description: string;
+  source?: string;
+  provenanceStatus?: 'LIVE' | 'CACHED' | 'SYNTHETIC' | 'ANALYST_VERIFIED';
+  lastSynced?: string;
+  isSynthetic?: boolean;
 }
 
 export interface ExplainableRiskAssessment {
@@ -350,6 +356,8 @@ export interface ExplainableRiskAssessment {
     cvssSeverity: string;
     isCisaKev: boolean;
     description?: string;
+    source?: string;
+    provenanceStatus?: 'LIVE' | 'CACHED' | 'SYNTHETIC';
   } | null;
   threat?: {
     id?: string;
@@ -357,9 +365,68 @@ export interface ExplainableRiskAssessment {
     severity: string;
     confidence: number;
     detectedAt?: string | Date;
+    isSynthetic?: boolean;
   } | null;
+  dataProvenance?: {
+    sources: {
+      name: string;
+      category: string;
+      status: 'LIVE' | 'CACHED' | 'SYNTHETIC' | 'ANALYST_VERIFIED';
+      isLive: boolean;
+      isSynthetic: boolean;
+    }[];
+  };
   evaluatedAt: string;
   formula: string;
+}
+
+export interface IntelligenceSourceInfo {
+  id: string;
+  name: string;
+  sourceType: string;
+  provider: string;
+  endpoint?: string;
+  status: IntelligenceSourceStatus;
+  lastSuccessfulSync?: string | null;
+  lastAttemptedSync?: string | null;
+  nextScheduledSync?: string | null;
+  recordCount: number;
+  errorMessage?: string | null;
+  syncDurationMs: number;
+  isLive: boolean;
+  isSynthetic: boolean;
+  freshnessSeconds: number;
+  freshnessLabel: 'LIVE' | 'RECENT' | 'STALE' | 'OUTDATED' | 'SYNTHETIC' | 'DEGRADED';
+  syncIntervalMinutes: number;
+  description?: string;
+}
+
+export interface IntelligenceFeedItem {
+  id: string;
+  cveId: string;
+  source: 'NVD' | 'CISA_KEV' | 'HYBRID';
+  sourceName: string;
+  provider: string;
+  description: string;
+  cvssScore: number;
+  cvssSeverity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
+  cvssVector?: string;
+  cwe?: string;
+  publishedDate?: string;
+  lastModifiedDate?: string;
+  affectedProducts: string[];
+  references: string[];
+  isCisaKev: boolean;
+  cisaDateAdded?: string;
+  cisaDueDate?: string;
+  cisaRequiredAction?: string;
+  knownRansomwareUse: 'Known' | 'Unknown' | string;
+  status: IntelligenceSourceStatus;
+  lastSyncedAt: string;
+  freshnessSeconds: number;
+  freshnessLabel: string;
+  isLive: boolean;
+  isSynthetic: boolean;
 }
 
 export interface BenchmarkScenario {

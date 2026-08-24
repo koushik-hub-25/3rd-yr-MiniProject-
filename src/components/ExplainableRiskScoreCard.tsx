@@ -323,7 +323,7 @@ export function ExplainableRiskScoreCard({
                     )}
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div className="flex items-center space-x-2.5">
+                      <div className="flex items-center space-x-2.5 flex-wrap gap-y-1">
                         <span className={cn("text-[10px] font-mono px-2 py-0.5 rounded border uppercase font-medium", getCategoryColor(factor.category))}>
                           {factor.category.replace("_", " ")}
                         </span>
@@ -335,6 +335,25 @@ export function ExplainableRiskScoreCard({
                             = {String(factor.value)}
                           </span>
                         </div>
+                        {factor.source && (
+                          <span className="text-[10px] text-muted-foreground/80 font-mono hidden md:inline-flex items-center gap-1">
+                            • {factor.source}
+                          </span>
+                        )}
+                        {factor.provenanceStatus && (
+                          <span className={cn(
+                            "text-[9px] px-1.5 py-0.5 rounded font-mono font-bold border",
+                            factor.provenanceStatus === "LIVE"
+                              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                              : factor.provenanceStatus === "CACHED"
+                              ? "bg-blue-500/10 text-blue-400 border-blue-500/30"
+                              : factor.provenanceStatus === "ANALYST_VERIFIED"
+                              ? "bg-cyan-500/10 text-cyan-400 border-cyan-500/30"
+                              : "bg-amber-500/10 text-amber-400 border-amber-500/30"
+                          )}>
+                            {factor.provenanceStatus}
+                          </span>
+                        )}
                       </div>
 
                       {/* Contribution Indicator */}
