@@ -2,7 +2,7 @@ import express from "express";
 import path from "path";
 import multer from "multer";
 import { createServer as createViteServer } from "vite";
-import { db, initDatabaseTables } from "./src/db";
+import { db, initDatabaseTables, resetDatabase } from "./src/db";
 import {
   reports,
   threats,
@@ -27,25 +27,46 @@ const upload = multer({ storage: multer.memoryStorage() });
 async function seedDatabaseIfEmpty() {
   try {
     await initDatabaseTables();
-    const existing = await db.select({ count: count() }).from(reports);
-    if (Number(existing[0]?.count || 0) === 0) {
-      console.log("Database is empty. Populating with comprehensive synthetic CTI dataset...");
+    let existingCount = 0;
+    try {
+      const existing = await db.select({ count: count() }).from(reports);
+      existingCount = Number(existing[0]?.count || 0);
+    } catch (queryErr: any) {
+      console.warn("[DB] Error reading reports, attempting recovery reset...", queryErr?.message);
+      resetDatabase();
+      await initDatabaseTables();
+      existingCount = 0;
+    }
+
+    if (existingCount === 0) {
+      console.log("Database is empty or newly recovered. Populating with synthetic CTI dataset...");
       await populateSyntheticData();
     } else {
       // Ensure synthetic incidents have realistic 6-month historical spread for analytics
-      const existingIncidents = await db.query.incidents.findMany();
-      for (let i = 0; i < existingIncidents.length; i++) {
-        const inc: any = existingIncidents[i];
-        if (typeof inc?.id === "string" && inc.id.startsWith("inc-syn-")) {
-          const num = parseInt(inc.id.replace("inc-syn-", ""), 10) || (i + 1);
-          const daysAgo = num <= 6 ? ((num - 1) * 0.4) : (3 + (num - 7) * 4.8);
-          const newDate = new Date(Date.now() - 1000 * 60 * 60 * 24 * daysAgo).toISOString();
-          await db.update(incidents).set({ date: newDate }).where(eq(incidents.id, inc.id));
+      try {
+        const existingIncidents = await db.query.incidents.findMany();
+        for (let i = 0; i < existingIncidents.length; i++) {
+          const inc: any = existingIncidents[i];
+          if (typeof inc?.id === "string" && inc.id.startsWith("inc-syn-")) {
+            const num = parseInt(inc.id.replace("inc-syn-", ""), 10) || (i + 1);
+            const daysAgo = num <= 6 ? ((num - 1) * 0.4) : (3 + (num - 7) * 4.8);
+            const newDate = new Date(Date.now() - 1000 * 60 * 60 * 24 * daysAgo).toISOString();
+            await db.update(incidents).set({ date: newDate }).where(eq(incidents.id, inc.id));
+          }
         }
+      } catch (e) {
+        console.warn("[DB] Non-blocking notice during incident date normalization:", e);
       }
     }
   } catch (err) {
-    console.error("Database seed check error:", err);
+    console.error("Database seed check critical error:", err);
+    try {
+      resetDatabase();
+      await initDatabaseTables();
+      await populateSyntheticData();
+    } catch (reSeedErr) {
+      console.error("Failed emergency reseed:", reSeedErr);
+    }
   }
 }
 
@@ -362,8 +383,8 @@ async function startServer() {
       const allReports = await db.query.reports.findMany();
       const reportMap = new Map(allReports.map(r => [r.id, r]));
 
-      const enrichedThreats = allThreats.map(t => {
-        const rep = t.reportId ? reportMap.get(t.reportId) : null;
+      const enrichedThreats = allThreats.map((t: any) => {
+        const rep: any = t.reportId ? reportMap.get(t.reportId) : null;
         return {
           ...t,
           source: rep ? `${rep.sourceOrigin || "Threat Report (OSINT)"} (${rep.analysisMode || "Gemini AI"})` : "Threat Report (OSINT)",

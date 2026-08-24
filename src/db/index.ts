@@ -1,15 +1,81 @@
 import { drizzle } from "drizzle-orm/libsql";
-import { createClient } from "@libsql/client";
+import { createClient, type Client } from "@libsql/client";
 import * as schema from "./schema";
+import fs from "fs";
+import path from "path";
 
-export const client = createClient({
+const DB_FILE = path.join(process.cwd(), "local.db");
+const DB_WAL = path.join(process.cwd(), "local.db-wal");
+const DB_SHM = path.join(process.cwd(), "local.db-shm");
+const DB_JOURNAL = path.join(process.cwd(), "local.db-journal");
+
+function removeDatabaseFiles() {
+  const files = [DB_FILE, DB_WAL, DB_SHM, DB_JOURNAL];
+  for (const file of files) {
+    try {
+      if (fs.existsSync(file)) {
+        fs.unlinkSync(file);
+      }
+    } catch (e) {
+      console.warn(`[DB] Could not remove ${file}:`, e);
+    }
+  }
+}
+
+let activeClient: Client = createClient({
   url: "file:local.db",
 });
 
-export const db = drizzle(client, { schema });
+let activeDb = drizzle(activeClient, { schema });
 
-export async function initDatabaseTables() {
-  await client.execute(`
+export function resetDatabase() {
+  console.warn("[DB] Resetting database files and recreating LibSQL connection...");
+  try {
+    if (typeof (activeClient as any)?.close === "function") {
+      (activeClient as any).close();
+    }
+  } catch (e) {
+    // ignore close error
+  }
+  removeDatabaseFiles();
+  activeClient = createClient({
+    url: "file:local.db",
+  });
+  activeDb = drizzle(activeClient, { schema });
+}
+
+export const client = new Proxy({} as Client, {
+  get(_target, prop, receiver) {
+    const val = Reflect.get(activeClient, prop, receiver);
+    if (typeof val === "function") {
+      return val.bind(activeClient);
+    }
+    return val;
+  },
+});
+
+export const db = new Proxy({} as any, {
+  get(_target, prop, receiver) {
+    const val = Reflect.get(activeDb, prop, receiver);
+    if (typeof val === "function") {
+      return val.bind(activeDb);
+    }
+    return val;
+  },
+});
+
+async function configurePragmas() {
+  try {
+    await activeClient.execute("PRAGMA journal_mode = WAL;");
+    await activeClient.execute("PRAGMA synchronous = NORMAL;");
+    await activeClient.execute("PRAGMA busy_timeout = 10000;");
+  } catch (err) {
+    console.warn("[DB] Warning configuring pragmas:", err);
+  }
+}
+
+async function createTables() {
+  await activeClient.execute(`
     CREATE TABLE IF NOT EXISTS reports (
       id TEXT PRIMARY KEY,
       filename TEXT NOT NULL,
@@ -30,7 +96,7 @@ export async function initDatabaseTables() {
     );
   `);
 
-  await client.execute(`
+  await activeClient.execute(`
     CREATE TABLE IF NOT EXISTS threats (
       id TEXT PRIMARY KEY,
       reportId TEXT,
@@ -50,7 +116,7 @@ export async function initDatabaseTables() {
     );
   `);
 
-  await client.execute(`
+  await activeClient.execute(`
     CREATE TABLE IF NOT EXISTS entities (
       id TEXT PRIMARY KEY,
       reportId TEXT,
@@ -61,7 +127,7 @@ export async function initDatabaseTables() {
     );
   `);
 
-  await client.execute(`
+  await activeClient.execute(`
     CREATE TABLE IF NOT EXISTS iocs (
       id TEXT PRIMARY KEY,
       reportId TEXT,
@@ -73,7 +139,7 @@ export async function initDatabaseTables() {
     );
   `);
 
-  await client.execute(`
+  await activeClient.execute(`
     CREATE TABLE IF NOT EXISTS incidents (
       id TEXT PRIMARY KEY,
       threatId TEXT,
@@ -91,7 +157,7 @@ export async function initDatabaseTables() {
     );
   `);
 
-  await client.execute(`
+  await activeClient.execute(`
     CREATE TABLE IF NOT EXISTS recommendations (
       id TEXT PRIMARY KEY,
       threatId TEXT,
@@ -102,7 +168,7 @@ export async function initDatabaseTables() {
     );
   `);
 
-  await client.execute(`
+  await activeClient.execute(`
     CREATE TABLE IF NOT EXISTS predictions (
       id TEXT PRIMARY KEY,
       category TEXT NOT NULL,
@@ -117,7 +183,7 @@ export async function initDatabaseTables() {
     );
   `);
 
-  await client.execute(`
+  await activeClient.execute(`
     CREATE TABLE IF NOT EXISTS analystNotes (
       id TEXT PRIMARY KEY,
       threatId TEXT,
@@ -128,3 +194,26 @@ export async function initDatabaseTables() {
     );
   `);
 }
+
+export async function initDatabaseTables(retryCount = 0): Promise<void> {
+  try {
+    // Run integrity check
+    const check = await activeClient.execute("PRAGMA integrity_check;");
+    const checkRow = check.rows?.[0] as any;
+    const checkResult = checkRow ? Object.values(checkRow)[0] : "ok";
+    if (checkResult !== "ok") {
+      throw new Error(`Database integrity check failed: ${JSON.stringify(checkResult)}`);
+    }
+
+    await configurePragmas();
+    await createTables();
+  } catch (err: any) {
+    console.error(`[DB] Database initialization error (attempt ${retryCount + 1}):`, err?.message || err);
+    if (retryCount < 2) {
+      resetDatabase();
+      return initDatabaseTables(retryCount + 1);
+    }
+    throw err;
+  }
+}
+
