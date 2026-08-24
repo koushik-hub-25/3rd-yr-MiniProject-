@@ -12,8 +12,18 @@ import {
   recommendations,
   predictions,
   analystNotes,
+  assets,
+  threatActors,
+  campaigns,
+  threatActorThreats,
+  threatActorIocs,
+  threatActorIncidents,
+  campaignThreats,
+  campaignIocs,
+  campaignIncidents,
+  campaignMitreTechniques,
 } from "./src/db/schema";
-import { eq, desc, asc, sql, count, like } from "drizzle-orm";
+import { eq, desc, asc, sql, count, like, and } from "drizzle-orm";
 import { analyzeIntelligenceReport } from "./server/ai";
 import { generateSyntheticCTIDatabase } from "./server/seedData";
 import { fetchNvdCve, getAllRecentNvdVulnerabilities } from "./server/nvdService";
@@ -21,6 +31,24 @@ import { checkCisaKev, getAllCisaKevEntries } from "./server/cisaKevService";
 import { lookupMitreTechnique, getAllMitreTechniques } from "./server/mitreService";
 import { correlateThreatIndicators } from "./server/correlationEngine";
 import { processAIAnalystQuery } from "./server/aiAnalyst";
+import {
+  calculateDeterministicRiskScore,
+  evaluateRiskWithLiveIntel,
+  BENCHMARK_RISK_SCENARIOS,
+  RiskEvaluationParams
+} from "./server/riskEngine";
+import {
+  iocEnrichmentService,
+  defangIoc,
+  refangIoc,
+  detectIocType
+} from "./server/iocEnrichmentService";
+import {
+  listThreatActors,
+  getThreatActorById,
+  listCampaigns,
+  getCampaignById
+} from "./server/threatActorService";
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -75,6 +103,15 @@ async function populateSyntheticData() {
 
   // Clear existing
   try {
+    await db.delete(campaignMitreTechniques);
+    await db.delete(campaignIncidents);
+    await db.delete(campaignIocs);
+    await db.delete(campaignThreats);
+    await db.delete(threatActorIncidents);
+    await db.delete(threatActorIocs);
+    await db.delete(threatActorThreats);
+    await db.delete(campaigns);
+    await db.delete(threatActors);
     await db.delete(analystNotes);
     await db.delete(recommendations);
     await db.delete(incidents);
@@ -83,6 +120,7 @@ async function populateSyntheticData() {
     await db.delete(threats);
     await db.delete(predictions);
     await db.delete(reports);
+    await db.delete(assets);
   } catch (e) {
     // Ignore clear errors if tables were just initialized
   }
@@ -96,8 +134,18 @@ async function populateSyntheticData() {
   if (data.incidents.length > 0) await db.insert(incidents).values(data.incidents);
   if (data.predictions.length > 0) await db.insert(predictions).values(data.predictions);
   if (data.analystNotes.length > 0) await db.insert(analystNotes).values(data.analystNotes);
+  if (data.assets && data.assets.length > 0) await db.insert(assets).values(data.assets);
+  if (data.threatActors && data.threatActors.length > 0) await db.insert(threatActors).values(data.threatActors);
+  if (data.campaigns && data.campaigns.length > 0) await db.insert(campaigns).values(data.campaigns);
+  if (data.threatActorThreats && data.threatActorThreats.length > 0) await db.insert(threatActorThreats).values(data.threatActorThreats);
+  if (data.threatActorIocs && data.threatActorIocs.length > 0) await db.insert(threatActorIocs).values(data.threatActorIocs);
+  if (data.threatActorIncidents && data.threatActorIncidents.length > 0) await db.insert(threatActorIncidents).values(data.threatActorIncidents);
+  if (data.campaignThreats && data.campaignThreats.length > 0) await db.insert(campaignThreats).values(data.campaignThreats);
+  if (data.campaignIocs && data.campaignIocs.length > 0) await db.insert(campaignIocs).values(data.campaignIocs);
+  if (data.campaignIncidents && data.campaignIncidents.length > 0) await db.insert(campaignIncidents).values(data.campaignIncidents);
+  if (data.campaignMitreTechniques && data.campaignMitreTechniques.length > 0) await db.insert(campaignMitreTechniques).values(data.campaignMitreTechniques);
 
-  console.log(`Seeding complete: ${data.reports.length} reports, ${data.threats.length} threats, ${data.iocs.length} IOCs, ${data.incidents.length} incidents.`);
+  console.log(`Seeding complete: ${data.reports.length} reports, ${data.threats.length} threats, ${data.iocs.length} IOCs, ${data.incidents.length} incidents, ${data.assets?.length || 0} assets, ${data.threatActors?.length || 0} threat actors, ${data.campaigns?.length || 0} campaigns.`);
 }
 
 async function startServer() {
@@ -151,6 +199,46 @@ async function startServer() {
       const reviewedThreats = await db.select({ count: count() }).from(threats).where(eq(threats.status, "reviewed"));
       const escalatedThreats = await db.select({ count: count() }).from(threats).where(eq(threats.status, "escalated"));
 
+      // Asset metrics
+      let totalAssets = 0;
+      let criticalAssets = 0;
+      let internetExposedAssets = 0;
+
+      try {
+        const assetsCount = await db.select({ count: count() }).from(assets);
+        totalAssets = Number(assetsCount[0]?.count || 0);
+
+        const criticalAssetsCount = await db.select({ count: count() }).from(assets).where(eq(assets.criticality, "CRITICAL"));
+        criticalAssets = Number(criticalAssetsCount[0]?.count || 0);
+
+        const internetExposedCount = await db.select({ count: count() }).from(assets).where(eq(assets.exposure, "INTERNET"));
+        internetExposedAssets = Number(internetExposedCount[0]?.count || 0);
+      } catch (assetErr) {
+        console.warn("[Stats] Error reading asset counts:", assetErr);
+      }
+
+      // Threat Actor & Campaign metrics
+      let totalThreatActors = 0;
+      let activeThreatActors = 0;
+      let totalCampaigns = 0;
+      let activeCampaigns = 0;
+
+      try {
+        const taCount = await db.select({ count: count() }).from(threatActors);
+        totalThreatActors = Number(taCount[0]?.count || 0);
+
+        const activeTaCount = await db.select({ count: count() }).from(threatActors).where(eq(threatActors.status, "Active"));
+        activeThreatActors = Number(activeTaCount[0]?.count || 0);
+
+        const campCount = await db.select({ count: count() }).from(campaigns);
+        totalCampaigns = Number(campCount[0]?.count || 0);
+
+        const activeCampCount = await db.select({ count: count() }).from(campaigns).where(eq(campaigns.status, "Active"));
+        activeCampaigns = Number(activeCampCount[0]?.count || 0);
+      } catch (taCampErr) {
+        console.warn("[Stats] Error reading threat actor/campaign counts:", taCampErr);
+      }
+
       res.json({
         totalReports: Number(reportsCount[0]?.count || 0),
         totalThreats: Number(threatsCount[0]?.count || 0),
@@ -164,10 +252,207 @@ async function startServer() {
         activeThreats: Number(activeThreats[0]?.count || 0),
         reviewedThreats: Number(reviewedThreats[0]?.count || 0),
         escalatedThreats: Number(escalatedThreats[0]?.count || 0),
+        totalAssets,
+        criticalAssets,
+        internetExposedAssets,
+        totalThreatActors,
+        activeThreatActors,
+        totalCampaigns,
+        activeCampaigns,
       });
     } catch (error) {
       console.error("Stats error:", error);
       res.status(500).json({ error: "Failed to fetch stats" });
+    }
+  });
+
+  // Assets Management API
+  app.get("/api/assets", async (req, res) => {
+    try {
+      const { search, type, criticality, exposure, environment, status } = req.query;
+      let allAssets = await db.query.assets.findMany({
+        orderBy: [desc(assets.updatedAt)]
+      });
+
+      if (search && typeof search === "string" && search.trim()) {
+        const query = search.toLowerCase().trim();
+        allAssets = allAssets.filter((a: any) =>
+          (a.name && a.name.toLowerCase().includes(query)) ||
+          (a.hostname && a.hostname.toLowerCase().includes(query)) ||
+          (a.ipAddress && a.ipAddress.toLowerCase().includes(query)) ||
+          (a.owner && a.owner.toLowerCase().includes(query)) ||
+          (a.department && a.department.toLowerCase().includes(query)) ||
+          (a.software && a.software.toLowerCase().includes(query)) ||
+          (a.operatingSystem && a.operatingSystem.toLowerCase().includes(query)) ||
+          (a.tags && a.tags.toLowerCase().includes(query)) ||
+          (a.description && a.description.toLowerCase().includes(query))
+        );
+      }
+
+      if (type && typeof type === "string" && type !== "ALL") {
+        allAssets = allAssets.filter((a: any) => a.assetType?.toUpperCase() === type.toUpperCase());
+      }
+      if (criticality && typeof criticality === "string" && criticality !== "ALL") {
+        allAssets = allAssets.filter((a: any) => a.criticality?.toUpperCase() === criticality.toUpperCase());
+      }
+      if (exposure && typeof exposure === "string" && exposure !== "ALL") {
+        allAssets = allAssets.filter((a: any) => a.exposure?.toUpperCase() === exposure.toUpperCase());
+      }
+      if (environment && typeof environment === "string" && environment !== "ALL") {
+        allAssets = allAssets.filter((a: any) => a.environment?.toUpperCase() === environment.toUpperCase());
+      }
+      if (status && typeof status === "string" && status !== "ALL") {
+        allAssets = allAssets.filter((a: any) => a.status?.toUpperCase() === status.toUpperCase());
+      }
+
+      res.json(allAssets);
+    } catch (error: any) {
+      console.error("Fetch assets error:", error);
+      res.status(500).json({ error: "Failed to fetch assets: " + error.message });
+    }
+  });
+
+  app.get("/api/assets/:id", async (req, res) => {
+    try {
+      const asset = await db.query.assets.findFirst({
+        where: eq(assets.id, req.params.id)
+      });
+      if (!asset) {
+        return res.status(404).json({ error: "Asset not found" });
+      }
+      res.json(asset);
+    } catch (error: any) {
+      console.error("Fetch asset by id error:", error);
+      res.status(500).json({ error: "Failed to fetch asset: " + error.message });
+    }
+  });
+
+  app.post("/api/assets", async (req, res) => {
+    try {
+      const {
+        name,
+        hostname,
+        ipAddress,
+        assetType,
+        operatingSystem,
+        software,
+        environment,
+        criticality,
+        exposure,
+        owner,
+        department,
+        location,
+        description,
+        tags,
+        status
+      } = req.body;
+
+      // Validation
+      if (!name || typeof name !== "string" || !name.trim()) {
+        return res.status(400).json({ error: "Asset name is required" });
+      }
+      if (!assetType || typeof assetType !== "string" || !assetType.trim()) {
+        return res.status(400).json({ error: "Asset type is required" });
+      }
+
+      const id = req.body.id && typeof req.body.id === "string" && req.body.id.trim()
+        ? req.body.id.trim()
+        : `ast-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+
+      const newAsset = {
+        id,
+        name: name.trim(),
+        hostname: hostname ? hostname.trim() : null,
+        ipAddress: ipAddress ? ipAddress.trim() : null,
+        assetType: assetType.trim().toUpperCase(),
+        operatingSystem: operatingSystem ? operatingSystem.trim() : null,
+        software: software ? software.trim() : null,
+        environment: environment ? environment.trim() : "Production",
+        criticality: criticality ? criticality.trim().toUpperCase() : "MEDIUM",
+        exposure: exposure ? exposure.trim().toUpperCase() : "INTERNAL",
+        owner: owner ? owner.trim() : null,
+        department: department ? department.trim() : null,
+        location: location ? location.trim() : null,
+        description: description ? description.trim() : null,
+        tags: tags ? tags.trim() : null,
+        status: status ? status.trim().toUpperCase() : "ACTIVE",
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      await db.insert(assets).values(newAsset);
+
+      res.status(201).json(newAsset);
+    } catch (error: any) {
+      console.error("Create asset error:", error);
+      res.status(500).json({ error: "Failed to create asset: " + error.message });
+    }
+  });
+
+  app.patch("/api/assets/:id", async (req, res) => {
+    try {
+      const existing = await db.query.assets.findFirst({
+        where: eq(assets.id, req.params.id)
+      });
+
+      if (!existing) {
+        return res.status(404).json({ error: "Asset not found" });
+      }
+
+      const updates: any = {
+        updatedAt: new Date()
+      };
+
+      if (req.body.name !== undefined) {
+        if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
+          return res.status(400).json({ error: "Asset name cannot be empty" });
+        }
+        updates.name = req.body.name.trim();
+      }
+      if (req.body.hostname !== undefined) updates.hostname = req.body.hostname ? req.body.hostname.trim() : null;
+      if (req.body.ipAddress !== undefined) updates.ipAddress = req.body.ipAddress ? req.body.ipAddress.trim() : null;
+      if (req.body.assetType !== undefined) updates.assetType = req.body.assetType.trim().toUpperCase();
+      if (req.body.operatingSystem !== undefined) updates.operatingSystem = req.body.operatingSystem ? req.body.operatingSystem.trim() : null;
+      if (req.body.software !== undefined) updates.software = req.body.software ? req.body.software.trim() : null;
+      if (req.body.environment !== undefined) updates.environment = req.body.environment.trim();
+      if (req.body.criticality !== undefined) updates.criticality = req.body.criticality.trim().toUpperCase();
+      if (req.body.exposure !== undefined) updates.exposure = req.body.exposure.trim().toUpperCase();
+      if (req.body.owner !== undefined) updates.owner = req.body.owner ? req.body.owner.trim() : null;
+      if (req.body.department !== undefined) updates.department = req.body.department ? req.body.department.trim() : null;
+      if (req.body.location !== undefined) updates.location = req.body.location ? req.body.location.trim() : null;
+      if (req.body.description !== undefined) updates.description = req.body.description ? req.body.description.trim() : null;
+      if (req.body.tags !== undefined) updates.tags = req.body.tags ? req.body.tags.trim() : null;
+      if (req.body.status !== undefined) updates.status = req.body.status.trim().toUpperCase();
+
+      await db.update(assets).set(updates).where(eq(assets.id, req.params.id));
+
+      const updatedAsset = await db.query.assets.findFirst({
+        where: eq(assets.id, req.params.id)
+      });
+
+      res.json(updatedAsset);
+    } catch (error: any) {
+      console.error("Update asset error:", error);
+      res.status(500).json({ error: "Failed to update asset: " + error.message });
+    }
+  });
+
+  app.delete("/api/assets/:id", async (req, res) => {
+    try {
+      const existing = await db.query.assets.findFirst({
+        where: eq(assets.id, req.params.id)
+      });
+
+      if (!existing) {
+        return res.status(404).json({ error: "Asset not found" });
+      }
+
+      await db.delete(assets).where(eq(assets.id, req.params.id));
+
+      res.json({ success: true, message: "Asset deleted successfully", id: req.params.id });
+    } catch (error: any) {
+      console.error("Delete asset error:", error);
+      res.status(500).json({ error: "Failed to delete asset: " + error.message });
     }
   });
 
@@ -484,15 +769,674 @@ async function startServer() {
     }
   });
 
-  // IOCs
+  // ==========================================
+  // IOC (INDICATORS OF COMPROMISE) API
+  // ==========================================
+
+  // 1. Filtered & Enriched IOCs List
   app.get("/api/iocs", async (req, res) => {
     try {
-      const allIocs = await db.query.iocs.findMany({
-        orderBy: [desc(iocs.confidence)]
+      const { search, type, minConfidence, severity, threatId, reportId } = req.query;
+      let allIocs = await db.query.iocs.findMany({
+        orderBy: [desc(iocs.confidence), desc(iocs.reputationScore)]
       });
-      res.json(allIocs);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to fetch IOCs" });
+
+      // Join threats & reports context for rich list cards
+      const allThreats = await db.query.threats.findMany();
+      const allReports = await db.query.reports.findMany();
+      const threatMap = new Map<string, any>(allThreats.map((t: any) => [t.id, t]));
+      const reportMap = new Map<string, any>(allReports.map((r: any) => [r.id, r]));
+
+      let enrichedList = allIocs.map((ioc: any) => {
+        const threat = ioc.threatId ? threatMap.get(ioc.threatId) : null;
+        const report = ioc.reportId ? reportMap.get(ioc.reportId) : null;
+        const derivedSeverity = ioc.severity || threat?.severity || (ioc.confidence >= 90 ? "HIGH" : "MEDIUM");
+
+        return {
+          ...ioc,
+          defangedValue: defangIoc(ioc.value, ioc.type),
+          threatTitle: threat?.title || null,
+          threatSeverity: threat?.severity || null,
+          reportTitle: report?.filename || report?.summary || null,
+          severity: derivedSeverity,
+          reputationScore: ioc.reputationScore || (ioc.confidence >= 95 ? 95 : ioc.confidence >= 90 ? 88 : 75)
+        };
+      });
+
+      // Filter: Search across value, context, type, tags
+      if (search && typeof search === "string" && search.trim()) {
+        const q = search.toLowerCase().trim();
+        enrichedList = enrichedList.filter((i: any) =>
+          i.value.toLowerCase().includes(q) ||
+          i.type.toLowerCase().includes(q) ||
+          (i.context && i.context.toLowerCase().includes(q)) ||
+          (i.tags && i.tags.toLowerCase().includes(q)) ||
+          (i.threatTitle && i.threatTitle.toLowerCase().includes(q))
+        );
+      }
+
+      // Filter: Type
+      if (type && typeof type === "string" && type !== "ALL") {
+        enrichedList = enrichedList.filter((i: any) => {
+          if (type.toUpperCase() === "IP") {
+            return i.type.toUpperCase() === "IPV4" || i.type.toUpperCase() === "IPV6" || i.type.toUpperCase() === "IP";
+          }
+          return i.type.toUpperCase() === type.toUpperCase();
+        });
+      }
+
+      // Filter: Confidence
+      if (minConfidence) {
+        const minConf = parseInt(String(minConfidence), 10);
+        if (!isNaN(minConf)) {
+          enrichedList = enrichedList.filter((i: any) => (i.confidence || 0) >= minConf);
+        }
+      }
+
+      // Filter: Severity
+      if (severity && typeof severity === "string" && severity !== "ALL") {
+        enrichedList = enrichedList.filter((i: any) => i.severity?.toUpperCase() === severity.toUpperCase());
+      }
+
+      // Filter: Direct Threat or Report
+      if (threatId && typeof threatId === "string") {
+        enrichedList = enrichedList.filter((i: any) => i.threatId === threatId);
+      }
+      if (reportId && typeof reportId === "string") {
+        enrichedList = enrichedList.filter((i: any) => i.reportId === reportId);
+      }
+
+      res.json(enrichedList);
+    } catch (error: any) {
+      console.error("Fetch IOCs error:", error);
+      res.status(500).json({ error: "Failed to fetch IOCs: " + error.message });
+    }
+  });
+
+  // 2. Real-time On-demand IOC Lookup & Investigation
+  app.post("/api/iocs/lookup", async (req, res) => {
+    try {
+      const { ioc: rawInput, type } = req.body;
+      if (!rawInput || typeof rawInput !== "string" || !rawInput.trim()) {
+        return res.status(400).json({ error: "IOC query value is required for investigation lookup." });
+      }
+
+      const cleanValue = refangIoc(rawInput).trim();
+      const detectedType = type || detectIocType(cleanValue);
+
+      const dossier = await iocEnrichmentService.getIocDetails(cleanValue);
+      if (!dossier) {
+        return res.status(404).json({ error: "Could not generate intelligence dossier for indicator." });
+      }
+
+      res.json(dossier);
+    } catch (error: any) {
+      console.error("IOC lookup investigation error:", error);
+      res.status(500).json({ error: "Investigation lookup failed: " + error.message });
+    }
+  });
+
+  // 3. IOC Detail Endpoint (Deep Dossier, Relationships, Multi-Source Enrichment)
+  app.get("/api/iocs/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const dossier = await iocEnrichmentService.getIocDetails(id);
+      if (!dossier) {
+        return res.status(404).json({ error: "Indicator of Compromise not found." });
+      }
+      res.json(dossier);
+    } catch (error: any) {
+      console.error("Fetch IOC detail error:", error);
+      res.status(500).json({ error: "Failed to fetch IOC details: " + error.message });
+    }
+  });
+
+  // 4. Create New Analyst IOC
+  app.post("/api/iocs", async (req, res) => {
+    try {
+      const { value, type, confidence, context, threatId, reportId, severity, tags } = req.body;
+      if (!value || typeof value !== "string" || !value.trim()) {
+        return res.status(400).json({ error: "Artifact value is required." });
+      }
+
+      const cleanValue = refangIoc(value).trim();
+      const iocType = type || detectIocType(cleanValue);
+      const id = `ioc-analyst-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+
+      const newIoc = {
+        id,
+        value: cleanValue,
+        type: iocType,
+        confidence: typeof confidence === "number" ? Math.min(100, Math.max(1, confidence)) : 90,
+        context: context ? String(context).trim() : "Analyst verified indicator of compromise",
+        threatId: threatId || null,
+        reportId: reportId || null,
+        severity: severity || "HIGH",
+        firstSeen: new Date(),
+        lastSeen: new Date(),
+        tags: tags || "analyst-created",
+        reputationScore: 85,
+        enrichmentData: null
+      };
+
+      await db.insert(iocs).values(newIoc);
+      res.status(201).json(newIoc);
+    } catch (error: any) {
+      console.error("Create IOC error:", error);
+      res.status(500).json({ error: "Failed to create IOC: " + error.message });
+    }
+  });
+
+  // 5. Update Existing IOC
+  app.patch("/api/iocs/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { context, confidence, severity, tags, reputationScore } = req.body;
+
+      const existing = await db.query.iocs.findFirst({
+        where: eq(iocs.id, id)
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "IOC not found" });
+      }
+
+      const updates: any = {};
+      if (context !== undefined) updates.context = context;
+      if (confidence !== undefined) updates.confidence = confidence;
+      if (severity !== undefined) updates.severity = severity;
+      if (tags !== undefined) updates.tags = tags;
+      if (reputationScore !== undefined) updates.reputationScore = reputationScore;
+      updates.lastSeen = new Date();
+
+      await db.update(iocs).set(updates).where(eq(iocs.id, id));
+      const updated = await db.query.iocs.findFirst({ where: eq(iocs.id, id) });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("Update IOC error:", error);
+      res.status(500).json({ error: "Failed to update IOC: " + error.message });
+    }
+  });
+
+  // 6. Delete IOC
+  app.delete("/api/iocs/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      await db.delete(iocs).where(eq(iocs.id, id));
+      res.json({ success: true, message: `IOC ${id} deleted successfully` });
+    } catch (error: any) {
+      console.error("Delete IOC error:", error);
+      res.status(500).json({ error: "Failed to delete IOC: " + error.message });
+    }
+  });
+
+  // 7. Export Single IOC in STIX 2.1 Bundle Format
+  app.get("/api/iocs/:id/export", async (req, res) => {
+    try {
+      const dossier = await iocEnrichmentService.getIocDetails(req.params.id);
+      if (!dossier) {
+        return res.status(404).json({ error: "IOC not found" });
+      }
+
+      const stixBundle = {
+        type: "bundle",
+        id: `bundle--${Math.random().toString(36).substring(2, 10)}`,
+        spec_version: "2.1",
+        objects: [
+          {
+            type: "indicator",
+            spec_version: "2.1",
+            id: `indicator--${dossier.ioc.id}`,
+            created: dossier.firstSeen,
+            modified: dossier.lastSeen,
+            name: `${dossier.ioc.type} Threat Artifact: ${dossier.defangedValue}`,
+            description: dossier.ioc.context || "ShieldZen extracted cyber threat indicator",
+            indicator_types: [dossier.ioc.type.toLowerCase()],
+            pattern: `[${dossier.ioc.type.toLowerCase()}:value = '${dossier.ioc.value}']`,
+            pattern_type: "stix",
+            confidence: dossier.ioc.confidence,
+            external_references: dossier.enrichment.vulnerabilityDetails ? [
+              {
+                source_name: "cve",
+                external_id: dossier.enrichment.vulnerabilityDetails.cveId
+              }
+            ] : []
+          }
+        ]
+      };
+
+      res.setHeader("Content-Disposition", `attachment; filename="shieldzen-ioc-${dossier.ioc.id}.json"`);
+      res.json(stixBundle);
+    } catch (error: any) {
+      res.status(500).json({ error: "Failed to export IOC STIX: " + error.message });
+    }
+  });
+
+  // ==========================================
+  // THREAT ACTORS INTELLIGENCE APIS
+  // ==========================================
+
+  // List all Threat Actors with filters
+  app.get("/api/threat-actors", async (req, res) => {
+    try {
+      const { origin, motivation, sophistication, status, search } = req.query;
+      const actorList = await listThreatActors({
+        origin: origin as string,
+        motivation: motivation as string,
+        sophistication: sophistication as string,
+        status: status as string,
+        search: search as string
+      });
+      res.json(actorList);
+    } catch (error: any) {
+      console.error("List threat actors error:", error);
+      res.status(500).json({ error: "Failed to list threat actors: " + error.message });
+    }
+  });
+
+  // Get single Threat Actor Intelligence Dossier
+  app.get("/api/threat-actors/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const dossier = await getThreatActorById(id);
+      if (!dossier) {
+        return res.status(404).json({ error: "Threat Actor not found" });
+      }
+      res.json(dossier);
+    } catch (error: any) {
+      console.error("Get threat actor dossier error:", error);
+      res.status(500).json({ error: "Failed to get threat actor dossier: " + error.message });
+    }
+  });
+
+  // Create new Threat Actor
+  app.post("/api/threat-actors", async (req, res) => {
+    try {
+      const { name, aliases, description, origin, motivation, sophistication, confidence, status, notes } = req.body;
+      if (!name || typeof name !== "string" || !name.trim()) {
+        return res.status(400).json({ error: "Threat actor name is required." });
+      }
+      if (!description || typeof description !== "string" || !description.trim()) {
+        return res.status(400).json({ error: "Threat actor description is required." });
+      }
+
+      const id = `act-user-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      const aliasString = Array.isArray(aliases) ? JSON.stringify(aliases) : typeof aliases === "string" ? JSON.stringify(aliases.split(",").map((s) => s.trim()).filter(Boolean)) : JSON.stringify([]);
+
+      const newActor = {
+        id,
+        name: name.trim(),
+        aliases: aliasString,
+        description: description.trim(),
+        origin: origin || "Unknown",
+        motivation: motivation || "Unknown",
+        sophistication: sophistication || "Medium",
+        confidence: typeof confidence === "number" ? Math.max(0, Math.min(100, confidence)) : 85,
+        status: status || "Active",
+        notes: notes || "",
+        isSynthetic: 0,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      await db.insert(threatActors).values(newActor);
+      const dossier = await getThreatActorById(id);
+      res.status(201).json(dossier);
+    } catch (error: any) {
+      console.error("Create threat actor error:", error);
+      res.status(500).json({ error: "Failed to create threat actor: " + error.message });
+    }
+  });
+
+  // Update Threat Actor
+  app.patch("/api/threat-actors/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { name, aliases, description, origin, motivation, sophistication, confidence, status, notes } = req.body;
+
+      const existing = await db.select().from(threatActors).where(eq(threatActors.id, id));
+      if (existing.length === 0) {
+        return res.status(404).json({ error: "Threat actor not found." });
+      }
+
+      const updateData: any = {
+        updatedAt: new Date()
+      };
+
+      if (name !== undefined) updateData.name = String(name).trim();
+      if (aliases !== undefined) {
+        updateData.aliases = Array.isArray(aliases) ? JSON.stringify(aliases) : JSON.stringify(String(aliases).split(",").map((s) => s.trim()).filter(Boolean));
+      }
+      if (description !== undefined) updateData.description = String(description).trim();
+      if (origin !== undefined) updateData.origin = String(origin);
+      if (motivation !== undefined) updateData.motivation = String(motivation);
+      if (sophistication !== undefined) updateData.sophistication = String(sophistication);
+      if (confidence !== undefined) updateData.confidence = Number(confidence);
+      if (status !== undefined) updateData.status = String(status);
+      if (notes !== undefined) updateData.notes = String(notes);
+
+      await db.update(threatActors).set(updateData).where(eq(threatActors.id, id));
+      const dossier = await getThreatActorById(id);
+      res.json(dossier);
+    } catch (error: any) {
+      console.error("Update threat actor error:", error);
+      res.status(500).json({ error: "Failed to update threat actor: " + error.message });
+    }
+  });
+
+  // Delete Threat Actor
+  app.delete("/api/threat-actors/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      await db.delete(threatActorThreats).where(eq(threatActorThreats.threatActorId, id));
+      await db.delete(threatActorIocs).where(eq(threatActorIocs.threatActorId, id));
+      await db.delete(threatActorIncidents).where(eq(threatActorIncidents.threatActorId, id));
+      await db.update(campaigns).set({ threatActorId: null }).where(eq(campaigns.threatActorId, id));
+      await db.delete(threatActors).where(eq(threatActors.id, id));
+      res.json({ success: true, message: `Threat actor ${id} deleted.` });
+    } catch (error: any) {
+      console.error("Delete threat actor error:", error);
+      res.status(500).json({ error: "Failed to delete threat actor: " + error.message });
+    }
+  });
+
+  // Associate relationship with Threat Actor
+  app.post("/api/threat-actors/:id/relationships", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { type, targetId, confidence, attributionType, context } = req.body;
+
+      if (!type || !targetId) {
+        return res.status(400).json({ error: "type and targetId are required." });
+      }
+
+      if (type === "THREAT") {
+        const linkId = `tat-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        await db.insert(threatActorThreats).values({
+          id: linkId,
+          threatActorId: id,
+          threatId: targetId,
+          relationshipConfidence: confidence || "confirmed",
+          attributionType: attributionType || "Primary Operator",
+          createdAt: new Date()
+        });
+      } else if (type === "IOC") {
+        const linkId = `tai-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        await db.insert(threatActorIocs).values({
+          id: linkId,
+          threatActorId: id,
+          iocId: targetId,
+          relationshipConfidence: confidence || "confirmed",
+          context: context || "Associated Adversary Artifact",
+          createdAt: new Date()
+        });
+      } else if (type === "INCIDENT") {
+        const linkId = `tainc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        await db.insert(threatActorIncidents).values({
+          id: linkId,
+          threatActorId: id,
+          incidentId: targetId,
+          confidence: typeof confidence === "number" ? confidence : 85,
+          createdAt: new Date()
+        });
+      } else if (type === "CAMPAIGN") {
+        await db.update(campaigns).set({ threatActorId: id }).where(eq(campaigns.id, targetId));
+      } else {
+        return res.status(400).json({ error: "Unsupported relationship type." });
+      }
+
+      const updated = await getThreatActorById(id);
+      res.json(updated);
+    } catch (error: any) {
+      console.error("Add threat actor relationship error:", error);
+      res.status(500).json({ error: "Failed to add relationship: " + error.message });
+    }
+  });
+
+  // Remove relationship from Threat Actor
+  app.delete("/api/threat-actors/:id/relationships", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { type, targetId } = req.body;
+
+      if (!type || !targetId) {
+        return res.status(400).json({ error: "type and targetId are required." });
+      }
+
+      if (type === "THREAT") {
+        await db.delete(threatActorThreats).where(and(eq(threatActorThreats.threatActorId, id), eq(threatActorThreats.threatId, targetId)));
+      } else if (type === "IOC") {
+        await db.delete(threatActorIocs).where(and(eq(threatActorIocs.threatActorId, id), eq(threatActorIocs.iocId, targetId)));
+      } else if (type === "INCIDENT") {
+        await db.delete(threatActorIncidents).where(and(eq(threatActorIncidents.threatActorId, id), eq(threatActorIncidents.incidentId, targetId)));
+      } else if (type === "CAMPAIGN") {
+        await db.update(campaigns).set({ threatActorId: null }).where(and(eq(campaigns.threatActorId, id), eq(campaigns.id, targetId)));
+      }
+
+      const updated = await getThreatActorById(id);
+      res.json(updated);
+    } catch (error: any) {
+      console.error("Remove relationship error:", error);
+      res.status(500).json({ error: "Failed to remove relationship: " + error.message });
+    }
+  });
+
+  // ==========================================
+  // CAMPAIGNS INTELLIGENCE APIS
+  // ==========================================
+
+  // List all Campaigns with filters
+  app.get("/api/campaigns", async (req, res) => {
+    try {
+      const { status, threatActorId, sector, region, search } = req.query;
+      const campaignList = await listCampaigns({
+        status: status as string,
+        threatActorId: threatActorId as string,
+        sector: sector as string,
+        region: region as string,
+        search: search as string
+      });
+      res.json(campaignList);
+    } catch (error: any) {
+      console.error("List campaigns error:", error);
+      res.status(500).json({ error: "Failed to list campaigns: " + error.message });
+    }
+  });
+
+  // Get single Campaign Intelligence Dossier
+  app.get("/api/campaigns/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const dossier = await getCampaignById(id);
+      if (!dossier) {
+        return res.status(404).json({ error: "Campaign not found" });
+      }
+      res.json(dossier);
+    } catch (error: any) {
+      console.error("Get campaign dossier error:", error);
+      res.status(500).json({ error: "Failed to get campaign dossier: " + error.message });
+    }
+  });
+
+  // Create new Campaign
+  app.post("/api/campaigns", async (req, res) => {
+    try {
+      const { name, description, threatActorId, targetSectors, targetRegions, objectives, status, confidence, notes } = req.body;
+      if (!name || typeof name !== "string" || !name.trim()) {
+        return res.status(400).json({ error: "Campaign name is required." });
+      }
+      if (!description || typeof description !== "string" || !description.trim()) {
+        return res.status(400).json({ error: "Campaign description is required." });
+      }
+
+      const id = `cmp-user-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      const sectorsString = Array.isArray(targetSectors) ? JSON.stringify(targetSectors) : typeof targetSectors === "string" ? JSON.stringify(targetSectors.split(",").map((s) => s.trim()).filter(Boolean)) : JSON.stringify([]);
+      const regionsString = Array.isArray(targetRegions) ? JSON.stringify(targetRegions) : typeof targetRegions === "string" ? JSON.stringify(targetRegions.split(",").map((s) => s.trim()).filter(Boolean)) : JSON.stringify([]);
+
+      const newCampaign = {
+        id,
+        name: name.trim(),
+        description: description.trim(),
+        threatActorId: threatActorId || null,
+        targetSectors: sectorsString,
+        targetRegions: regionsString,
+        objectives: objectives || "",
+        status: status || "Active",
+        confidence: typeof confidence === "number" ? Math.max(0, Math.min(100, confidence)) : 85,
+        notes: notes || "",
+        firstObserved: new Date(),
+        lastObserved: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      await db.insert(campaigns).values(newCampaign);
+      const dossier = await getCampaignById(id);
+      res.status(201).json(dossier);
+    } catch (error: any) {
+      console.error("Create campaign error:", error);
+      res.status(500).json({ error: "Failed to create campaign: " + error.message });
+    }
+  });
+
+  // Update Campaign
+  app.patch("/api/campaigns/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { name, description, threatActorId, targetSectors, targetRegions, objectives, status, confidence, notes } = req.body;
+
+      const existing = await db.select().from(campaigns).where(eq(campaigns.id, id));
+      if (existing.length === 0) {
+        return res.status(404).json({ error: "Campaign not found." });
+      }
+
+      const updateData: any = {
+        updatedAt: new Date()
+      };
+
+      if (name !== undefined) updateData.name = String(name).trim();
+      if (description !== undefined) updateData.description = String(description).trim();
+      if (threatActorId !== undefined) updateData.threatActorId = threatActorId || null;
+      if (targetSectors !== undefined) {
+        updateData.targetSectors = Array.isArray(targetSectors) ? JSON.stringify(targetSectors) : JSON.stringify(String(targetSectors).split(",").map((s) => s.trim()).filter(Boolean));
+      }
+      if (targetRegions !== undefined) {
+        updateData.targetRegions = Array.isArray(targetRegions) ? JSON.stringify(targetRegions) : JSON.stringify(String(targetRegions).split(",").map((s) => s.trim()).filter(Boolean));
+      }
+      if (objectives !== undefined) updateData.objectives = String(objectives);
+      if (status !== undefined) updateData.status = String(status);
+      if (confidence !== undefined) updateData.confidence = Number(confidence);
+      if (notes !== undefined) updateData.notes = String(notes);
+
+      await db.update(campaigns).set(updateData).where(eq(campaigns.id, id));
+      const dossier = await getCampaignById(id);
+      res.json(dossier);
+    } catch (error: any) {
+      console.error("Update campaign error:", error);
+      res.status(500).json({ error: "Failed to update campaign: " + error.message });
+    }
+  });
+
+  // Delete Campaign
+  app.delete("/api/campaigns/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      await db.delete(campaignThreats).where(eq(campaignThreats.campaignId, id));
+      await db.delete(campaignIocs).where(eq(campaignIocs.campaignId, id));
+      await db.delete(campaignIncidents).where(eq(campaignIncidents.campaignId, id));
+      await db.delete(campaignMitreTechniques).where(eq(campaignMitreTechniques.campaignId, id));
+      await db.delete(campaigns).where(eq(campaigns.id, id));
+      res.json({ success: true, message: `Campaign ${id} deleted.` });
+    } catch (error: any) {
+      console.error("Delete campaign error:", error);
+      res.status(500).json({ error: "Failed to delete campaign: " + error.message });
+    }
+  });
+
+  // Associate relationship with Campaign
+  app.post("/api/campaigns/:id/relationships", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { type, targetId, confidence, techniqueName, tactic } = req.body;
+
+      if (!type || !targetId) {
+        return res.status(400).json({ error: "type and targetId are required." });
+      }
+
+      if (type === "THREAT") {
+        const linkId = `cth-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        await db.insert(campaignThreats).values({
+          id: linkId,
+          campaignId: id,
+          threatId: targetId,
+          relationshipConfidence: confidence || "confirmed",
+          createdAt: new Date()
+        });
+      } else if (type === "IOC") {
+        const linkId = `cioc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        await db.insert(campaignIocs).values({
+          id: linkId,
+          campaignId: id,
+          iocId: targetId,
+          relationshipConfidence: confidence || "confirmed",
+          createdAt: new Date()
+        });
+      } else if (type === "INCIDENT") {
+        const linkId = `cinc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        await db.insert(campaignIncidents).values({
+          id: linkId,
+          campaignId: id,
+          incidentId: targetId,
+          confidence: typeof confidence === "number" ? confidence : 85,
+          createdAt: new Date()
+        });
+      } else if (type === "TECHNIQUE") {
+        const linkId = `cmt-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        await db.insert(campaignMitreTechniques).values({
+          id: linkId,
+          campaignId: id,
+          techniqueId: targetId,
+          techniqueName: techniqueName || `Technique ${targetId}`,
+          tactic: tactic || "Execution",
+          confidence: typeof confidence === "number" ? confidence : 90,
+          createdAt: new Date()
+        });
+      } else {
+        return res.status(400).json({ error: "Unsupported campaign relationship type." });
+      }
+
+      const updated = await getCampaignById(id);
+      res.json(updated);
+    } catch (error: any) {
+      console.error("Add campaign relationship error:", error);
+      res.status(500).json({ error: "Failed to add campaign relationship: " + error.message });
+    }
+  });
+
+  // Remove relationship from Campaign
+  app.delete("/api/campaigns/:id/relationships", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { type, targetId } = req.body;
+
+      if (!type || !targetId) {
+        return res.status(400).json({ error: "type and targetId are required." });
+      }
+
+      if (type === "THREAT") {
+        await db.delete(campaignThreats).where(and(eq(campaignThreats.campaignId, id), eq(campaignThreats.threatId, targetId)));
+      } else if (type === "IOC") {
+        await db.delete(campaignIocs).where(and(eq(campaignIocs.campaignId, id), eq(campaignIocs.iocId, targetId)));
+      } else if (type === "INCIDENT") {
+        await db.delete(campaignIncidents).where(and(eq(campaignIncidents.campaignId, id), eq(campaignIncidents.incidentId, targetId)));
+      } else if (type === "TECHNIQUE") {
+        await db.delete(campaignMitreTechniques).where(and(eq(campaignMitreTechniques.campaignId, id), eq(campaignMitreTechniques.techniqueId, targetId)));
+      }
+
+      const updated = await getCampaignById(id);
+      res.json(updated);
+    } catch (error: any) {
+      console.error("Remove campaign relationship error:", error);
+      res.status(500).json({ error: "Failed to remove campaign relationship: " + error.message });
     }
   });
 
@@ -763,6 +1707,196 @@ async function startServer() {
       res.json(result);
     } catch (e: any) {
       res.status(500).json({ error: "Failed to correlate threat indicators: " + e.message });
+    }
+  });
+
+  // ==========================================
+  // Explainable Risk Scoring Engine Endpoints
+  // ==========================================
+  app.post("/api/risk/evaluate", async (req, res) => {
+    try {
+      const body = req.body || {};
+      const params: RiskEvaluationParams = { ...body };
+
+      // If assetId is provided, enrich with real asset properties
+      if (body.assetId) {
+        const foundAsset = await db.query.assets.findFirst({
+          where: eq(assets.id, body.assetId)
+        });
+        if (foundAsset) {
+          params.assetName = params.assetName || foundAsset.name;
+          params.assetCriticality = params.assetCriticality || foundAsset.criticality;
+          params.assetExposure = params.assetExposure || foundAsset.exposure;
+          params.assetEnvironment = params.assetEnvironment || foundAsset.environment;
+          params.assetIp = params.assetIp || foundAsset.ipAddress || undefined;
+        }
+      }
+
+      // If threatId is provided, enrich with real threat properties
+      if (body.threatId) {
+        const foundThreat = await db.query.threats.findFirst({
+          where: eq(threats.id, body.threatId)
+        });
+        if (foundThreat) {
+          params.threatTitle = params.threatTitle || foundThreat.title;
+          params.threatSeverity = params.threatSeverity || foundThreat.analystSeverityOverride || foundThreat.severity;
+          params.threatConfidence = params.threatConfidence || foundThreat.confidence;
+          params.detectedAt = params.detectedAt || foundThreat.detectedAt;
+
+          // Attempt to extract CVE if not already provided
+          if (!params.cveId) {
+            const textToScan = `${foundThreat.title} ${foundThreat.description} ${foundThreat.evidence || ""}`;
+            const cveMatch = textToScan.match(/CVE-\d{4}-\d{4,7}/i);
+            if (cveMatch) {
+              params.cveId = cveMatch[0].toUpperCase();
+            }
+          }
+        }
+      }
+
+      const assessment = await evaluateRiskWithLiveIntel(params);
+      res.json(assessment);
+    } catch (e: any) {
+      console.error("Risk evaluation error:", e);
+      res.status(500).json({ error: "Failed to evaluate risk score: " + e.message });
+    }
+  });
+
+  app.get("/api/risk/scenarios", async (req, res) => {
+    try {
+      const scenarios = Object.entries(BENCHMARK_RISK_SCENARIOS).map(([key, item]) => {
+        const result = calculateDeterministicRiskScore(item.params as any);
+        return {
+          id: item.id,
+          name: item.name,
+          description: item.description,
+          params: item.params,
+          result
+        };
+      });
+      res.json(scenarios);
+    } catch (e: any) {
+      res.status(500).json({ error: "Failed to fetch risk scenarios: " + e.message });
+    }
+  });
+
+  app.get("/api/risk/threat/:id", async (req, res) => {
+    try {
+      const foundThreat = await db.query.threats.findFirst({
+        where: eq(threats.id, req.params.id)
+      });
+      if (!foundThreat) return res.status(404).json({ error: "Threat not found" });
+
+      const textToScan = `${foundThreat.title} ${foundThreat.description} ${foundThreat.evidence || ""}`;
+      const cveMatch = textToScan.match(/CVE-\d{4}-\d{4,7}/i);
+      const cveId = cveMatch ? cveMatch[0].toUpperCase() : undefined;
+
+      // Find matching asset if affected systems are mentioned
+      const allAssets = await db.query.assets.findMany();
+      let matchedAsset = allAssets.find(a => {
+        if (foundThreat.affectedSystems && (foundThreat.affectedSystems.toLowerCase().includes(a.name.toLowerCase()) || (a.hostname && foundThreat.affectedSystems.toLowerCase().includes(a.hostname.toLowerCase())))) {
+          return true;
+        }
+        if (a.software && textToScan.toLowerCase().includes(a.software.toLowerCase())) {
+          return true;
+        }
+        return false;
+      }) || allAssets[0];
+
+      const assessment = await evaluateRiskWithLiveIntel({
+        threatId: foundThreat.id,
+        threatTitle: foundThreat.title,
+        threatSeverity: foundThreat.analystSeverityOverride || foundThreat.severity,
+        threatConfidence: foundThreat.confidence,
+        detectedAt: foundThreat.detectedAt,
+        cveId,
+        assetId: matchedAsset?.id,
+        assetName: matchedAsset?.name || "Corporate Enterprise Perimeter",
+        assetCriticality: matchedAsset?.criticality || "HIGH",
+        assetExposure: matchedAsset?.exposure || "INTERNET",
+        assetEnvironment: matchedAsset?.environment || "Production",
+        assetIp: matchedAsset?.ipAddress || undefined
+      });
+
+      res.json(assessment);
+    } catch (e: any) {
+      res.status(500).json({ error: "Failed to assess threat risk: " + e.message });
+    }
+  });
+
+  app.get("/api/risk/asset/:id", async (req, res) => {
+    try {
+      const foundAsset = await db.query.assets.findFirst({
+        where: eq(assets.id, req.params.id)
+      });
+      if (!foundAsset) return res.status(404).json({ error: "Asset not found" });
+
+      // Find threats relevant to this asset (by software or affectedSystems)
+      const allThreats = await db.query.threats.findMany();
+      const matchedThreat = allThreats.find(t => {
+        const text = `${t.title} ${t.description} ${t.affectedSystems || ""}`.toLowerCase();
+        if (foundAsset.software && text.includes(foundAsset.software.toLowerCase())) return true;
+        if (text.includes(foundAsset.name.toLowerCase())) return true;
+        if (foundAsset.hostname && text.includes(foundAsset.hostname.toLowerCase())) return true;
+        return false;
+      }) || allThreats[0];
+
+      const textToScan = matchedThreat ? `${matchedThreat.title} ${matchedThreat.description} ${matchedThreat.evidence || ""}` : "";
+      const cveMatch = textToScan.match(/CVE-\d{4}-\d{4,7}/i);
+
+      const assessment = await evaluateRiskWithLiveIntel({
+        assetId: foundAsset.id,
+        assetName: foundAsset.name,
+        assetCriticality: foundAsset.criticality,
+        assetExposure: foundAsset.exposure,
+        assetEnvironment: foundAsset.environment,
+        assetIp: foundAsset.ipAddress || undefined,
+        threatId: matchedThreat?.id,
+        threatTitle: matchedThreat?.title || `Security exposure on ${foundAsset.name}`,
+        threatSeverity: matchedThreat?.severity || (foundAsset.criticality === "CRITICAL" ? "HIGH" : "MEDIUM"),
+        threatConfidence: matchedThreat?.confidence || 85,
+        detectedAt: matchedThreat?.detectedAt,
+        cveId: cveMatch ? cveMatch[0].toUpperCase() : undefined
+      });
+
+      res.json(assessment);
+    } catch (e: any) {
+      res.status(500).json({ error: "Failed to assess asset risk: " + e.message });
+    }
+  });
+
+  app.get("/api/risk/matrix", async (req, res) => {
+    try {
+      const allAssets = await db.query.assets.findMany();
+      const allThreats = await db.query.threats.findMany();
+
+      const assessments = await Promise.all(
+        allAssets.slice(0, 10).map(async (asset, idx) => {
+          const threat = allThreats[idx % allThreats.length];
+          const text = threat ? `${threat.title} ${threat.description}` : "";
+          const cveMatch = text.match(/CVE-\d{4}-\d{4,7}/i);
+          return await evaluateRiskWithLiveIntel({
+            assetId: asset.id,
+            assetName: asset.name,
+            assetCriticality: asset.criticality,
+            assetExposure: asset.exposure,
+            assetEnvironment: asset.environment,
+            assetIp: asset.ipAddress || undefined,
+            threatId: threat?.id,
+            threatTitle: threat?.title,
+            threatSeverity: threat?.severity,
+            threatConfidence: threat?.confidence || 80,
+            detectedAt: threat?.detectedAt,
+            cveId: cveMatch ? cveMatch[0].toUpperCase() : undefined
+          });
+        })
+      );
+
+      // Sort descending by score
+      assessments.sort((a, b) => b.score - a.score);
+      res.json(assessments);
+    } catch (e: any) {
+      res.status(500).json({ error: "Failed to generate risk matrix: " + e.message });
     }
   });
 

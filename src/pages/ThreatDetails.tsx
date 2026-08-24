@@ -22,7 +22,8 @@ import {
   Clock,
   Sparkles
 } from "lucide-react";
-import type { Threat, Recommendation, IOC, Entity, Incident, AnalystNote } from "../types";
+import type { Threat, Recommendation, IOC, Entity, Incident, AnalystNote, ExplainableRiskAssessment } from "../types";
+import { ExplainableRiskScoreCard } from "../components/ExplainableRiskScoreCard";
 
 export default function ThreatDetails() {
   const { id } = useParams();
@@ -39,6 +40,8 @@ export default function ThreatDetails() {
   const [newNote, setNewNote] = useState("");
   const [authorName, setAuthorName] = useState("Jordan Chen (L2 SOC Analyst)");
   const [savingAction, setSavingAction] = useState(false);
+  const [riskAssessment, setRiskAssessment] = useState<ExplainableRiskAssessment | null>(null);
+  const [loadingRisk, setLoadingRisk] = useState(false);
 
   const fetchThreatDetails = async () => {
     try {
@@ -57,8 +60,24 @@ export default function ThreatDetails() {
     }
   };
 
+  const fetchRiskAssessment = async () => {
+    try {
+      setLoadingRisk(true);
+      const res = await fetch(`/api/risk/threat/${id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setRiskAssessment(data);
+      }
+    } catch (e) {
+      console.error("Risk assessment fetch failed", e);
+    } finally {
+      setLoadingRisk(false);
+    }
+  };
+
   useEffect(() => {
     fetchThreatDetails();
+    fetchRiskAssessment();
   }, [id]);
 
   const copyToClipboard = (text: string, iocId?: string) => {
@@ -215,6 +234,13 @@ export default function ThreatDetails() {
         </div>
       </div>
 
+      {/* Deterministic Explainable Risk Scoring Card */}
+      <ExplainableRiskScoreCard
+        assessment={riskAssessment}
+        loading={loadingRisk}
+        onRefresh={fetchRiskAssessment}
+      />
+
       {/* Grid: Main Analysis Left, Controls Right */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Left 2 Cols: AI Explainability, Evidence, IOCs, Recommendations */}
@@ -315,14 +341,24 @@ export default function ThreatDetails() {
                           <td className="p-3 font-mono text-slate-200">{ioc.value}</td>
                           <td className="p-3 text-slate-400 text-[11px]">{ioc.context || "Identified Artifact"}</td>
                           <td className="p-3 text-right">
-                            <button
-                              onClick={() => copyToClipboard(ioc.value, ioc.id)}
-                              title="Copy to clipboard"
-                              className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition-colors inline-flex items-center gap-1"
-                            >
-                              {copiedIoc === ioc.id ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                              <span className="text-[10px]">{copiedIoc === ioc.id ? "Copied" : "Copy"}</span>
-                            </button>
+                            <div className="flex items-center justify-end gap-1.5">
+                              <Link
+                                to={`/iocs?search=${encodeURIComponent(ioc.value)}`}
+                                title="Investigate in IOC Vault"
+                                className="p-1 text-blue-400 hover:text-white hover:bg-slate-800 rounded transition-colors inline-flex items-center gap-1 text-[10px] font-mono border border-slate-800 hover:border-slate-700"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                                <span>Investigate</span>
+                              </Link>
+                              <button
+                                onClick={() => copyToClipboard(ioc.value, ioc.id)}
+                                title="Copy to clipboard"
+                                className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition-colors inline-flex items-center gap-1"
+                              >
+                                {copiedIoc === ioc.id ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                <span className="text-[10px]">{copiedIoc === ioc.id ? "Copied" : "Copy"}</span>
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}

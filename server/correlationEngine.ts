@@ -1,6 +1,7 @@
 import { fetchNvdCve, NvdVulnerability } from "./nvdService";
 import { checkCisaKev, CisaKevEntry } from "./cisaKevService";
 import { lookupMitreTechnique, MitreTechnique } from "./mitreService";
+import { calculateDeterministicRiskScore, ExplainableRiskAssessment } from "./riskEngine";
 
 export interface CorrelatedThreatIntel {
   cveId?: string;
@@ -13,6 +14,7 @@ export interface CorrelatedThreatIntel {
   reasoningPoints: string[];
   sourceAttribution: string[];
   recommendationMatrix: string[];
+  explainableRiskAssessment?: ExplainableRiskAssessment | null;
 }
 
 /**
@@ -130,6 +132,19 @@ export async function correlateThreatIndicators(params: {
     recommendationMatrix.push("Implement strict email quarantine rules for high-risk inbound attachments and spoofed domains.");
   }
 
+  // Calculate deterministic explainable risk assessment
+  const explainableAssessment = calculateDeterministicRiskScore({
+    cveId: combinedCveList[0],
+    cvssScore: primaryNvd?.cvssScore,
+    isCisaKev: primaryKev?.isKnownExploited,
+    exploitAvailability: primaryKev?.isKnownExploited ? "WEAPONIZED" : primaryNvd?.cvssScore ? "PUBLIC_POC" : "THEORETICAL",
+    threatTitle: params.threatTitle || (combinedCveList[0] ? `Threat targeting ${combinedCveList[0]}` : "Correlated Threat Pattern"),
+    threatSeverity: params.initialSeverity || riskPriority,
+    threatConfidence: 88 + (mitreMapping.length > 0 ? 4 : 0) + (primaryKev?.isKnownExploited ? 5 : 0),
+    assetCriticality: "HIGH",
+    assetExposure: "INTERNET"
+  });
+
   return {
     cveId: combinedCveList[0],
     nvdData: primaryNvd,
@@ -140,6 +155,7 @@ export async function correlateThreatIndicators(params: {
     confidence: 88 + (mitreMapping.length > 0 ? 4 : 0) + (primaryKev?.isKnownExploited ? 5 : 0),
     reasoningPoints,
     sourceAttribution,
-    recommendationMatrix: recommendationMatrix.length > 0 ? recommendationMatrix : ["Monitor egress telemetry for anomalous connections."]
+    recommendationMatrix: recommendationMatrix.length > 0 ? recommendationMatrix : ["Monitor egress telemetry for anomalous connections."],
+    explainableRiskAssessment: explainableAssessment
   };
 }

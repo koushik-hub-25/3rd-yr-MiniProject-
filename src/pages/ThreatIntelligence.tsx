@@ -9,6 +9,7 @@ import { Threat, NvdVulnerability, CisaKevEntry, MitreTechnique, CorrelatedThrea
 import { Card, CardHeader, CardTitle, CardContent, Badge, SeverityBadge, ConfidenceMeter, SourceBadge, DataOriginLabel, cn } from "../components/ui";
 import { SourceFilterBar, SourceFilterType } from "../components/SourceFilterBar";
 import { AIAnalystDrawer } from "../components/AIAnalystDrawer";
+import { ExplainableRiskScoreCard } from "../components/ExplainableRiskScoreCard";
 
 export default function ThreatIntelligence() {
   const [searchParams] = useSearchParams();
@@ -372,7 +373,7 @@ export default function ThreatIntelligence() {
                   <div className="pt-2 border-t border-slate-800 space-y-3">
                     <div className="flex items-center justify-between">
                       <h4 className="text-[11px] font-bold font-mono uppercase text-slate-400 tracking-wider flex items-center gap-2">
-                        <Layers className="w-3.5 h-3.5 text-cyan-400" /> Multi-Source Intelligence Correlation
+                        <Layers className="w-3.5 h-3.5 text-cyan-400" /> Multi-Source Intelligence Correlation & Risk Assessment
                       </h4>
                       {correlating && (
                         <span className="text-[10px] text-cyan-400 font-mono flex items-center gap-1">
@@ -380,6 +381,15 @@ export default function ThreatIntelligence() {
                         </span>
                       )}
                     </div>
+
+                    {/* Deterministic Explainable Risk Score Card */}
+                    {correlationData?.explainableRiskAssessment && (
+                      <ExplainableRiskScoreCard
+                        assessment={correlationData.explainableRiskAssessment}
+                        loading={correlating}
+                        showRawFormula={false}
+                      />
+                    )}
 
                     {/* NVD Card */}
                     {correlationData?.nvdData && (

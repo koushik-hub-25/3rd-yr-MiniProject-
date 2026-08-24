@@ -135,9 +135,35 @@ async function createTables() {
       type TEXT NOT NULL,
       value TEXT NOT NULL,
       confidence INTEGER DEFAULT 90,
-      context TEXT
+      context TEXT,
+      severity TEXT DEFAULT 'HIGH',
+      firstSeen INTEGER,
+      lastSeen INTEGER,
+      tags TEXT,
+      reputationScore INTEGER DEFAULT 85,
+      enrichmentData TEXT
     );
   `);
+
+  // Migrate existing tables if columns are missing
+  try {
+    await activeClient.execute("ALTER TABLE iocs ADD COLUMN severity TEXT DEFAULT 'HIGH';");
+  } catch (_) {}
+  try {
+    await activeClient.execute("ALTER TABLE iocs ADD COLUMN firstSeen INTEGER;");
+  } catch (_) {}
+  try {
+    await activeClient.execute("ALTER TABLE iocs ADD COLUMN lastSeen INTEGER;");
+  } catch (_) {}
+  try {
+    await activeClient.execute("ALTER TABLE iocs ADD COLUMN tags TEXT;");
+  } catch (_) {}
+  try {
+    await activeClient.execute("ALTER TABLE iocs ADD COLUMN reputationScore INTEGER DEFAULT 85;");
+  } catch (_) {}
+  try {
+    await activeClient.execute("ALTER TABLE iocs ADD COLUMN enrichmentData TEXT;");
+  } catch (_) {}
 
   await activeClient.execute(`
     CREATE TABLE IF NOT EXISTS incidents (
@@ -191,6 +217,142 @@ async function createTables() {
       author TEXT NOT NULL,
       note TEXT NOT NULL,
       timestamp INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+  `);
+
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS assets (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      hostname TEXT,
+      ipAddress TEXT,
+      assetType TEXT NOT NULL,
+      operatingSystem TEXT,
+      software TEXT,
+      environment TEXT NOT NULL DEFAULT 'Production',
+      criticality TEXT NOT NULL DEFAULT 'MEDIUM',
+      exposure TEXT NOT NULL DEFAULT 'INTERNAL',
+      owner TEXT,
+      department TEXT,
+      location TEXT,
+      description TEXT,
+      tags TEXT,
+      status TEXT NOT NULL DEFAULT 'ACTIVE',
+      createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      updatedAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+  `);
+
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS threatActors (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      aliases TEXT,
+      description TEXT NOT NULL,
+      origin TEXT NOT NULL DEFAULT 'Unknown',
+      motivation TEXT NOT NULL DEFAULT 'Unknown',
+      sophistication TEXT NOT NULL DEFAULT 'Medium',
+      confidence INTEGER NOT NULL DEFAULT 85,
+      firstObserved INTEGER,
+      lastObserved INTEGER,
+      status TEXT NOT NULL DEFAULT 'Active',
+      notes TEXT,
+      isSynthetic INTEGER DEFAULT 1,
+      createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      updatedAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+  `);
+
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      threatActorId TEXT,
+      firstObserved INTEGER,
+      lastObserved INTEGER,
+      targetSectors TEXT,
+      targetRegions TEXT,
+      objectives TEXT,
+      status TEXT NOT NULL DEFAULT 'Active',
+      confidence INTEGER NOT NULL DEFAULT 85,
+      notes TEXT,
+      createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      updatedAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+  `);
+
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS threatActorThreats (
+      id TEXT PRIMARY KEY,
+      threatActorId TEXT NOT NULL,
+      threatId TEXT NOT NULL,
+      relationshipConfidence TEXT NOT NULL DEFAULT 'confirmed',
+      attributionType TEXT DEFAULT 'Primary Operator',
+      createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+  `);
+
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS threatActorIocs (
+      id TEXT PRIMARY KEY,
+      threatActorId TEXT NOT NULL,
+      iocId TEXT NOT NULL,
+      relationshipConfidence TEXT NOT NULL DEFAULT 'confirmed',
+      context TEXT,
+      createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+  `);
+
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS threatActorIncidents (
+      id TEXT PRIMARY KEY,
+      threatActorId TEXT NOT NULL,
+      incidentId TEXT NOT NULL,
+      confidence INTEGER NOT NULL DEFAULT 85,
+      createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+  `);
+
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS campaignThreats (
+      id TEXT PRIMARY KEY,
+      campaignId TEXT NOT NULL,
+      threatId TEXT NOT NULL,
+      relationshipConfidence TEXT NOT NULL DEFAULT 'confirmed',
+      createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+  `);
+
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS campaignIocs (
+      id TEXT PRIMARY KEY,
+      campaignId TEXT NOT NULL,
+      iocId TEXT NOT NULL,
+      relationshipConfidence TEXT NOT NULL DEFAULT 'confirmed',
+      createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+  `);
+
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS campaignIncidents (
+      id TEXT PRIMARY KEY,
+      campaignId TEXT NOT NULL,
+      incidentId TEXT NOT NULL,
+      confidence INTEGER NOT NULL DEFAULT 85,
+      createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+  `);
+
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS campaignMitreTechniques (
+      id TEXT PRIMARY KEY,
+      campaignId TEXT NOT NULL,
+      techniqueId TEXT NOT NULL,
+      techniqueName TEXT,
+      tactic TEXT,
+      confidence INTEGER NOT NULL DEFAULT 90,
+      createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
     );
   `);
 }

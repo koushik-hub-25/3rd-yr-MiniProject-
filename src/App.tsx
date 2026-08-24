@@ -25,7 +25,10 @@ import {
   X,
   Radio,
   ArrowRight,
-  Shield
+  Shield,
+  Server,
+  Skull,
+  Flame
 } from "lucide-react";
 import React, { useState, useEffect } from "react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
@@ -41,12 +44,18 @@ import Reports from "./pages/Reports";
 import Threats from "./pages/Threats";
 import ThreatDetails from "./pages/ThreatDetails";
 import Incidents from "./pages/Incidents";
+import AssetManagement from "./pages/AssetManagement";
 import ThreatMap from "./pages/ThreatMap";
 import EmergingThreats from "./pages/EmergingThreats";
 import Analytics from "./pages/Analytics";
 import IOCVault from "./pages/IOCVault";
 import Settings from "./pages/Settings";
 import Login from "./pages/Login";
+import RiskScoringEngine from "./pages/RiskScoringEngine";
+import ThreatActors from "./pages/ThreatActors";
+import ThreatActorDetails from "./pages/ThreatActorDetails";
+import Campaigns from "./pages/Campaigns";
+import CampaignDetails from "./pages/CampaignDetails";
 
 function TopNavigation({ onOpenAiAssistant }: { onOpenAiAssistant: () => void }) {
   const location = useLocation();
@@ -89,13 +98,19 @@ function TopNavigation({ onOpenAiAssistant }: { onOpenAiAssistant: () => void })
   const mainNavItems = [
     { name: "Dashboard", path: "/" },
     { name: "Intelligence", path: "/threat-intelligence" },
-    { name: "Reports", path: "/reports" },
+    { name: "Risk Engine", path: "/risk-engine" },
+    { name: "Assets", path: "/assets" },
     { name: "Threats", path: "/threats" },
+    { name: "Reports", path: "/reports" },
     { name: "Incidents", path: "/incidents" },
     { name: "Analytics", path: "/analytics" },
   ];
 
   const moreNavItems = [
+    { name: "Threat Actors", path: "/threat-actors", icon: Skull, desc: "Adversary intelligence dossiers" },
+    { name: "Threat Campaigns", path: "/campaigns", icon: Flame, desc: "Multi-stage cyber operations" },
+    { name: "Risk Scoring Engine", path: "/risk-engine", icon: Activity, desc: "Deterministic 0-100 scoring" },
+    { name: "Asset Inventory", path: "/assets", icon: Server, desc: "Endpoints & network exposure" },
     { name: "Threat Map", path: "/map", icon: MapIcon, desc: "Geographic risk heatmap" },
     { name: "Emerging Threats", path: "/emerging", icon: TrendingUp, desc: "AI trend forecast" },
     { name: "Upload Report", path: "/upload", icon: UploadCloud, desc: "Extract IOCs & synthesize" },
@@ -437,6 +452,12 @@ function MainLayout() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/threat-intelligence" element={<ThreatIntelligence />} />
+          <Route path="/risk-engine" element={<RiskScoringEngine />} />
+          <Route path="/assets" element={<AssetManagement />} />
+          <Route path="/threat-actors" element={<ThreatActors />} />
+          <Route path="/threat-actors/:id" element={<ThreatActorDetails />} />
+          <Route path="/campaigns" element={<Campaigns />} />
+          <Route path="/campaigns/:id" element={<CampaignDetails />} />
           <Route path="/upload" element={<Upload />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/threats" element={<Threats />} />
