@@ -6,6 +6,11 @@ export interface AuthResult {
   message?: string;
   error?: string;
   requiresVerification?: boolean;
+  otpRequired?: boolean;
+  challengeId?: string;
+  maskedEmail?: string;
+  expiresAt?: string;
+  resendCooldown?: number;
   email?: string;
   user?: UserProfile;
 }
@@ -15,6 +20,8 @@ interface AuthContextType {
   isAuthenticated: boolean;
   loading: boolean;
   login: (email: string, password: string) => Promise<AuthResult>;
+  verifyOtp: (challengeId: string, otp: string) => Promise<AuthResult>;
+  resendOtp: (challengeId: string) => Promise<{ success: boolean; challengeId?: string; maskedEmail?: string; expiresAt?: string; resendCooldown?: number; message?: string; error?: string }>;
   register: (name: string, email: string, password: string, role?: string) => Promise<AuthResult>;
   verifyEmail: (email: string, token: string) => Promise<AuthResult>;
   resendVerification: (email: string) => Promise<AuthResult>;
@@ -67,6 +74,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await res.json();
 
+      // Check if 2FA OTP challenge is returned
+      if (res.ok && data.success && data.otpRequired) {
+        return {
+          success: true,
+          otpRequired: true,
+          challengeId: data.challengeId,
+          maskedEmail: data.maskedEmail,
+          expiresAt: data.expiresAt,
+          resendCooldown: data.resendCooldown,
+          email: email.trim()
+        };
+      }
+
       if (res.ok && data.success && data.user) {
         setUser(data.user);
         return { success: true, user: data.user };
@@ -90,6 +110,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return {
         success: false,
         error: "Unable to connect to authentication service. Please try again."
+      };
+    }
+  };
+
+  const verifyOtp = async (challengeId: string, otp: string): Promise<AuthResult> => {
+    try {
+      const res = await fetch("/api/auth/verify-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challengeId, otp: otp.trim() })
+      });
+      const data = await res.json();
+
+      if (res.ok && data.success && data.user) {
+        setUser(data.user);
+        return { success: true, user: data.user };
+      }
+
+      return {
+        success: false,
+        error: data.error || "Invalid verification code."
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        error: "Network error while verifying authentication code."
+      };
+    }
+  };
+
+  const resendOtp = async (challengeId: string) => {
+    try {
+      const res = await fetch("/api/auth/resend-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challengeId })
+      });
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        return {
+          success: true,
+          challengeId: data.challengeId,
+          maskedEmail: data.maskedEmail,
+          expiresAt: data.expiresAt,
+          resendCooldown: data.resendCooldown || 30,
+          message: data.message || "A new 6-digit code has been sent."
+        };
+      }
+
+      return {
+        success: false,
+        error: data.error || "Failed to resend verification code.",
+        resendCooldown: data.resendCooldown
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        error: "Failed to connect to verification server."
       };
     }
   };
@@ -257,6 +336,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isAuthenticated: !!user,
         loading,
         login,
+        verifyOtp,
+        resendOtp,
         register,
         verifyEmail,
         resendVerification,

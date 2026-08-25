@@ -305,4 +305,15 @@ export const auditLogs = sqliteTable("audit_logs", {
   details: text("details"),
 });
 
+export const loginOtpChallenges = sqliteTable("login_otp_challenges", {
+  id: text("id").primaryKey(),
+  userId: text("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  otpHash: text("otpHash").notNull(),
+  expiresAt: integer("expiresAt", { mode: "timestamp" }).notNull(),
+  attempts: integer("attempts").notNull().default(0),
+  createdAt: integer("createdAt", { mode: "timestamp" }).notNull().default(sql`(strftime('%s', 'now'))`),
+  verifiedAt: integer("verifiedAt", { mode: "timestamp" }),
+  invalidatedAt: integer("invalidatedAt", { mode: "timestamp" }),
+});
+
 

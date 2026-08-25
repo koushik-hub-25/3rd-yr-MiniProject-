@@ -15,8 +15,9 @@ export interface LoggedEmail {
   previewUrl?: string;
   verificationToken?: string;
   resetToken?: string;
+  otpCode?: string;
   timestamp: string;
-  type: 'verification' | 'password_reset' | 'notification';
+  type: 'verification' | 'password_reset' | 'otp' | 'notification';
 }
 
 const recentTestEmails: LoggedEmail[] = [];
@@ -25,23 +26,47 @@ export function getRecentTestEmails(): LoggedEmail[] {
   return [...recentTestEmails].reverse().slice(0, 10);
 }
 
-function getTransporter() {
+function sanitizePass(pass?: string): string {
+  if (!pass) return "";
+  // Google App passwords are 16 chars with spaces like 'abcd efgh ijkl mnop'; remove spaces
+  const cleaned = pass.trim();
+  if (cleaned.length >= 16 && cleaned.includes(" ")) {
+    return cleaned.replace(/\s+/g, "");
+  }
+  return cleaned;
+}
+
+function getTransporter(forceSecure?: boolean) {
   const host = process.env.SMTP_HOST?.trim();
-  const port = parseInt(process.env.SMTP_PORT || "587", 10);
+  const service = process.env.SMTP_SERVICE?.trim().toLowerCase();
+  const rawPort = parseInt(process.env.SMTP_PORT || "587", 10);
+  const port = forceSecure ? 465 : rawPort;
   const user = process.env.SMTP_USER?.trim();
-  const pass = process.env.SMTP_PASS?.trim();
-  const secure = process.env.SMTP_SECURE === "true" || port === 465;
+  const pass = sanitizePass(process.env.SMTP_PASS);
+  const isGmail = service === "gmail" || (host ? host.toLowerCase().includes("gmail.com") : false);
+  const secure = forceSecure || process.env.SMTP_SECURE === "true" || port === 465;
 
   // Only attempt SMTP if real, non-placeholder credentials are provided
-  if (host && user && pass && !host.includes("example.com") && !host.includes("your-provider.com")) {
+  if ((host || isGmail) && user && pass && !host?.includes("example.com") && !host?.includes("your-provider.com")) {
+    if (isGmail) {
+      return nodemailer.createTransport({
+        service: "gmail",
+        auth: { user, pass },
+        connectionTimeout: 6000,
+        greetingTimeout: 5000,
+        socketTimeout: 6000,
+        tls: { rejectUnauthorized: false }
+      });
+    }
+
     return nodemailer.createTransport({
       host,
       port,
       secure,
       auth: { user, pass },
-      connectionTimeout: 4000, // 4-second timeout to prevent hanging on blocked cloud ports
-      greetingTimeout: 3000,
-      socketTimeout: 4000,
+      connectionTimeout: 6000,
+      greetingTimeout: 5000,
+      socketTimeout: 6000,
       tls: { rejectUnauthorized: false }
     });
   }
@@ -50,8 +75,9 @@ function getTransporter() {
 }
 
 export async function sendEmail({ to, subject, html, text }: SendEmailParams): Promise<{ sent: boolean; messageId?: string; simulated?: boolean }> {
-  const from = process.env.SMTP_FROM || '"ShieldZen Cyber Intel" <security@shieldzen.sec>';
-  const transporter = getTransporter();
+  const user = process.env.SMTP_USER?.trim();
+  const from = process.env.SMTP_FROM || process.env.EMAIL_FROM || (user ? `"ShieldZen Security" <${user}>` : '"ShieldZen Cyber Intel" <security@shieldzen.sec>');
+  let transporter = getTransporter();
 
   if (transporter) {
     try {
@@ -65,7 +91,25 @@ export async function sendEmail({ to, subject, html, text }: SendEmailParams): P
       console.log(`[EmailService] Real SMTP Email dispatched to ${to} (Message ID: ${info.messageId})`);
       return { sent: true, messageId: info.messageId, simulated: false };
     } catch (err: any) {
-      console.warn(`[EmailService] SMTP delivery to ${to} timed out or failed (${err?.message || "connection error"}). Falling back to Sandbox dispatch.`);
+      console.warn(`[EmailService] Primary SMTP attempt to ${to} failed (${err?.message || "connection error"}). Trying secondary SSL fallback...`);
+      
+      // Secondary attempt with forced SSL (Port 465) if applicable
+      try {
+        const fallbackTransporter = getTransporter(true);
+        if (fallbackTransporter) {
+          const info = await fallbackTransporter.sendMail({
+            from,
+            to,
+            subject,
+            text,
+            html,
+          });
+          console.log(`[EmailService] SMTP SSL Fallback dispatched to ${to} (Message ID: ${info.messageId})`);
+          return { sent: true, messageId: info.messageId, simulated: false };
+        }
+      } catch (fallbackErr: any) {
+        console.warn(`[EmailService] SMTP fallback to ${to} also failed (${fallbackErr?.message || "connection timeout"}). Routing to Sandbox dispatch.`);
+      }
     }
   }
 
@@ -206,6 +250,67 @@ export async function sendPasswordResetEmail(email: string, name: string, token:
           </div>
 
           <p style="font-size: 12px; color: #64748B;">This password reset token is only valid for 60 minutes. If you did not request this change, please disregard this email.</p>
+          
+          <div class="footer">
+            ShieldZen Cyber Threat Intelligence &copy; ${new Date().getFullYear()} &bull; Sandboxed SOC Environment
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+
+  const res = await sendEmail({ to: email, subject, text, html });
+  return res.sent;
+}
+
+export async function sendOtpEmail(email: string, name: string, otp: string): Promise<boolean> {
+  // Store in test list (Sandbox outbox for test environments)
+  recentTestEmails.push({
+    id: "mail-" + Math.random().toString(36).substring(2, 9),
+    to: email,
+    subject: "ShieldZen Login Verification Code",
+    otpCode: otp,
+    timestamp: new Date().toISOString(),
+    type: 'otp'
+  });
+
+  const subject = "ShieldZen Login Verification Code";
+  const text = `Hello,\n\nA login attempt was made for your ShieldZen account.\n\nYour verification code is:\n\n${otp}\n\nThis code expires in 5 minutes.\n\nIf you did not attempt to log in, you can safely ignore this email.\n\nDo not share this code with anyone.\n\nShieldZen Security Team`;
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0B0F17; color: #E2E8F0; margin: 0; padding: 24px; }
+          .card { max-width: 560px; margin: 0 auto; background-color: #131B2A; border: 1px solid #1E293B; border-radius: 12px; padding: 32px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+          .header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; border-bottom: 1px solid #1E293B; padding-bottom: 16px; }
+          .logo { font-size: 20px; font-weight: 700; color: #38BDF8; letter-spacing: -0.5px; }
+          .badge { background-color: rgba(56, 189, 248, 0.1); color: #38BDF8; font-size: 11px; padding: 3px 8px; border-radius: 4px; font-weight: 600; border: 1px solid rgba(56, 189, 248, 0.2); }
+          h2 { color: #F8FAFC; margin-top: 0; font-size: 20px; }
+          p { color: #94A3B8; line-height: 1.6; font-size: 14px; margin-bottom: 16px; }
+          .otp-box { background-color: #090D16; border: 1px solid #0284C7; border-radius: 8px; padding: 20px; text-align: center; margin: 24px 0; }
+          .otp-code { font-family: monospace; font-size: 32px; font-weight: 700; color: #38BDF8; letter-spacing: 8px; }
+          .footer { margin-top: 32px; border-top: 1px solid #1E293B; padding-top: 16px; font-size: 12px; color: #64748B; text-align: center; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="header">
+            <span class="logo">ShieldZen</span>
+            <span class="badge">Security 2FA</span>
+          </div>
+          <h2>Login Verification Code</h2>
+          <p>Hello${name ? ` <strong>${name}</strong>` : ""},</p>
+          <p>A login attempt was made for your ShieldZen account. Enter the 6-digit verification code below to complete your authentication:</p>
+          
+          <div class="otp-box">
+            <div class="otp-code">${otp}</div>
+          </div>
+
+          <p style="font-size: 13px; color: #F59E0B; font-weight: 500; text-align: center;">&bull; This code expires in 5 minutes &bull;</p>
+          <p style="font-size: 12px; color: #64748B;">If you did not attempt to log in, please secure your account or alert your SOC administrator immediately. Never share this code with anyone.</p>
           
           <div class="footer">
             ShieldZen Cyber Threat Intelligence &copy; ${new Date().getFullYear()} &bull; Sandboxed SOC Environment

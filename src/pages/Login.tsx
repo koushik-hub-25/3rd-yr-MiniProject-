@@ -20,11 +20,12 @@ import {
   ExternalLink,
   ChevronDown,
   ChevronUp,
-  UserPlus
+  UserPlus,
+  Clock
 } from "lucide-react";
 import { cn } from "../components/ui";
 
-type AuthMode = "login" | "register" | "verify" | "forgot" | "reset";
+type AuthMode = "login" | "register" | "verify" | "forgot" | "reset" | "otp";
 
 interface TestEmail {
   id: string;
@@ -33,8 +34,9 @@ interface TestEmail {
   previewUrl?: string;
   verificationToken?: string;
   resetToken?: string;
+  otpCode?: string;
   timestamp: string;
-  type: "verification" | "password_reset" | "notification";
+  type: "verification" | "password_reset" | "otp" | "notification";
 }
 
 export default function Login() {
@@ -49,6 +51,14 @@ export default function Login() {
   const [role, setRole] = useState("analyst");
   const [token, setToken] = useState("");
 
+  // 2FA OTP State
+  const [otpCode, setOtpCode] = useState("");
+  const [challengeId, setChallengeId] = useState("");
+  const [maskedEmail, setMaskedEmail] = useState("");
+  const [otpExpiresAt, setOtpExpiresAt] = useState<string>("");
+  const [resendCooldown, setResendCooldown] = useState<number>(0);
+  const [expirySecondsLeft, setExpirySecondsLeft] = useState<number>(300);
+
   // States & Feedback
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -58,9 +68,31 @@ export default function Login() {
   const [testEmails, setTestEmails] = useState<TestEmail[]>([]);
   const [showMailbox, setShowMailbox] = useState(false);
 
-  const { login, register, verifyEmail, resendVerification, forgotPassword, resetPassword, isAuthenticated } = useAuth();
+  const { login, verifyOtp, resendOtp, register, verifyEmail, resendVerification, forgotPassword, resetPassword, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+
+  // Resend cooldown timer
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const interval = setInterval(() => {
+      setResendCooldown((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [resendCooldown]);
+
+  // Expiration countdown timer for OTP
+  useEffect(() => {
+    if (mode !== "otp" || !otpExpiresAt) return;
+    const updateCountdown = () => {
+      const remainingMs = new Date(otpExpiresAt).getTime() - Date.now();
+      const seconds = Math.max(0, Math.floor(remainingMs / 1000));
+      setExpirySecondsLeft(seconds);
+    };
+    updateCountdown();
+    const interval = setInterval(updateCountdown, 1000);
+    return () => clearInterval(interval);
+  }, [mode, otpExpiresAt]);
 
   // Redirect if already logged in
   useEffect(() => {
@@ -79,7 +111,7 @@ export default function Login() {
     if (urlEmail) setEmail(urlEmail);
     if (urlToken) setToken(urlToken);
 
-    if (urlMode && ["login", "register", "verify", "forgot", "reset"].includes(urlMode)) {
+    if (urlMode && ["login", "register", "verify", "forgot", "reset", "otp"].includes(urlMode)) {
       setMode(urlMode);
     }
   }, [searchParams]);
@@ -109,7 +141,7 @@ export default function Login() {
     setSearchParams(newMode === "login" ? {} : { mode: newMode });
   };
 
-  // 1. Submit Login
+  // 1. Submit Login (Step 1: Credentials check -> 2FA challenge)
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setStatusMsg(null);
@@ -119,8 +151,22 @@ export default function Login() {
     setLoading(false);
 
     if (res.success) {
-      const from = (location.state as any)?.from?.pathname || "/";
-      navigate(from, { replace: true });
+      if (res.otpRequired && res.challengeId) {
+        setChallengeId(res.challengeId);
+        setMaskedEmail(res.maskedEmail || email);
+        setOtpExpiresAt(res.expiresAt || new Date(Date.now() + 5 * 60 * 1000).toISOString());
+        setResendCooldown(res.resendCooldown || 30);
+        setOtpCode("");
+        setMode("otp");
+        setStatusMsg({
+          type: "info",
+          text: `A 6-digit verification code has been sent to ${res.maskedEmail || email}.`
+        });
+        fetchTestEmails();
+      } else if (res.user) {
+        const from = (location.state as any)?.from?.pathname || "/";
+        navigate(from, { replace: true });
+      }
     } else {
       if (res.requiresVerification) {
         setStatusMsg({
@@ -134,6 +180,62 @@ export default function Login() {
           type: "error",
           text: res.error || "Invalid credentials."
         });
+      }
+    }
+  };
+
+  // 2. Submit OTP (Step 2: Verify 6-digit code and complete login)
+  const handleOtpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setStatusMsg(null);
+
+    const cleanOtp = otpCode.trim();
+    if (!/^\d{6}$/.test(cleanOtp)) {
+      setStatusMsg({ type: "error", text: "Please enter a valid 6-digit numeric verification code." });
+      return;
+    }
+
+    setLoading(true);
+    const res = await verifyOtp(challengeId, cleanOtp);
+    setLoading(false);
+
+    if (res.success) {
+      setStatusMsg({ type: "success", text: "Two-factor authentication successful! Launching console..." });
+      const from = (location.state as any)?.from?.pathname || "/";
+      navigate(from, { replace: true });
+    } else {
+      setStatusMsg({
+        type: "error",
+        text: res.error || "Invalid verification code. Please check your code or request a new one."
+      });
+    }
+  };
+
+  // 3. Resend OTP
+  const handleResendOtpSubmit = async () => {
+    if (resendCooldown > 0 || !challengeId) return;
+    setResending(true);
+    setStatusMsg(null);
+
+    const res = await resendOtp(challengeId);
+    setResending(false);
+
+    if (res.success) {
+      if (res.challengeId) setChallengeId(res.challengeId);
+      if (res.expiresAt) setOtpExpiresAt(res.expiresAt);
+      setResendCooldown(res.resendCooldown || 30);
+      setStatusMsg({
+        type: "info",
+        text: res.message || "A fresh 6-digit verification code has been dispatched."
+      });
+      fetchTestEmails();
+    } else {
+      setStatusMsg({
+        type: "error",
+        text: res.error || "Failed to resend verification code."
+      });
+      if (res.resendCooldown) {
+        setResendCooldown(res.resendCooldown);
       }
     }
   };
@@ -283,7 +385,12 @@ export default function Login() {
   // Apply token from test mailbox directly
   const applyTestEmail = (item: TestEmail) => {
     setEmail(item.to);
-    if (item.verificationToken) {
+    if (item.otpCode) {
+      setOtpCode(item.otpCode);
+      if (mode !== "otp") {
+        setMode("otp");
+      }
+    } else if (item.verificationToken) {
       setToken(item.verificationToken);
       setMode("verify");
       setSearchParams({ mode: "verify", email: item.to, token: item.verificationToken });
@@ -292,6 +399,12 @@ export default function Login() {
       setMode("reset");
       setSearchParams({ mode: "reset", email: item.to, token: item.resetToken });
     }
+  };
+
+  const formatCountdown = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
   return (
@@ -354,7 +467,7 @@ export default function Login() {
             <div className="mt-3 max-h-48 overflow-y-auto space-y-2 pr-1">
               {testEmails.length === 0 ? (
                 <p className="text-xs text-slate-400 py-3 text-center font-mono">
-                  No emails dispatched yet. Register an account or request a password reset to see outgoing links here.
+                  No emails dispatched yet. Sign in or register to see outgoing OTPs and tokens here.
                 </p>
               ) : (
                 testEmails.map((mail) => (
@@ -366,11 +479,20 @@ export default function Login() {
                       <div className="flex items-center gap-2">
                         <span className={cn(
                           "text-[9px] font-mono font-bold px-1.5 py-0.5 rounded uppercase",
-                          mail.type === "verification" ? "bg-cyan-950 text-cyan-300 border border-cyan-800" : "bg-red-950 text-red-300 border border-red-800"
+                          mail.type === "otp"
+                            ? "bg-amber-950 text-amber-300 border border-amber-800"
+                            : mail.type === "verification"
+                            ? "bg-cyan-950 text-cyan-300 border border-cyan-800"
+                            : "bg-red-950 text-red-300 border border-red-800"
                         )}>
-                          {mail.type}
+                          {mail.type === "otp" ? "2FA OTP" : mail.type}
                         </span>
                         <span className="font-semibold text-slate-200 truncate">{mail.to}</span>
+                        {mail.otpCode && (
+                          <span className="font-mono font-bold text-cyan-300 text-xs px-1.5 py-0.5 bg-cyan-950 rounded border border-cyan-800/80">
+                            Code: {mail.otpCode}
+                          </span>
+                        )}
                       </div>
                       <p className="text-[11px] text-slate-400 truncate mt-0.5">{mail.subject}</p>
                     </div>
@@ -380,7 +502,7 @@ export default function Login() {
                       onClick={() => applyTestEmail(mail)}
                       className="px-2.5 py-1 text-[11px] font-mono font-semibold bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/30 rounded-lg flex items-center gap-1 transition-colors cursor-pointer shrink-0"
                     >
-                      <span>Fill Token</span>
+                      <span>{mail.otpCode ? "Fill Code" : "Fill Token"}</span>
                       <ArrowRight className="w-3 h-3" />
                     </button>
                   </div>
@@ -401,13 +523,15 @@ export default function Login() {
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
             {mode === "login" && "Sign In to Analyst Console"}
+            {mode === "otp" && "Two-Factor Verification"}
             {mode === "register" && "Create Analyst Account"}
             {mode === "verify" && "Verify Email Address"}
             {mode === "forgot" && "Reset Credential Access"}
             {mode === "reset" && "Set New Password"}
           </h1>
           <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
-            {mode === "login" && "Enter your verified corporate credentials to access intelligence telemetry."}
+            {mode === "login" && "Enter your verified corporate credentials to begin authentication."}
+            {mode === "otp" && "Enter the 6-digit one-time code sent to your registered email."}
             {mode === "register" && "Register your profile to participate in cyber threat investigation."}
             {mode === "verify" && "Enter the verification token sent to your email to activate clearance."}
             {mode === "forgot" && "Provide your registered email address to receive reset instructions."}
@@ -488,7 +612,7 @@ export default function Login() {
                 disabled={loading}
                 className="w-full mt-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-cyan-950/60 transition-all cursor-pointer disabled:opacity-50"
               >
-                {loading ? "Verifying Credentials..." : "Authenticate & Open Console"}
+                {loading ? "Verifying Credentials..." : "Verify & Proceed to 2FA"}
                 <ArrowRight className="w-4 h-4" />
               </button>
 
@@ -500,6 +624,92 @@ export default function Login() {
                   className="text-xs text-cyan-400 font-semibold hover:underline cursor-pointer"
                 >
                   Create Account
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Mode: TWO-FACTOR AUTHENTICATION (OTP) */}
+          {mode === "otp" && (
+            <form onSubmit={handleOtpSubmit} className="space-y-4">
+              <div className="p-3 rounded-xl bg-cyan-950/30 border border-cyan-500/30 text-xs">
+                <div className="flex items-center justify-between text-cyan-300 font-mono text-[11px] mb-1">
+                  <span className="flex items-center gap-1.5">
+                    <Shield className="w-3.5 h-3.5 text-cyan-400" />
+                    Target: <strong>{maskedEmail || email}</strong>
+                  </span>
+                  <span className={cn(
+                    "flex items-center gap-1 font-bold",
+                    expirySecondsLeft < 60 ? "text-red-400 animate-pulse" : "text-slate-400"
+                  )}>
+                    <Clock className="w-3 h-3" />
+                    {formatCountdown(expirySecondsLeft)}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Enter the 6-digit one-time passcode to authenticate your session.
+                </p>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-[11px] font-mono font-bold uppercase text-slate-400">
+                    6-Digit Verification Code
+                  </label>
+                  <button
+                    type="button"
+                    disabled={resending || resendCooldown > 0}
+                    onClick={handleResendOtpSubmit}
+                    className="text-[11px] font-mono text-cyan-400 hover:underline flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={cn("w-3 h-3", resending && "animate-spin")} />
+                    <span>
+                      {resending
+                        ? "Dispatching..."
+                        : resendCooldown > 0
+                        ? `Resend in ${resendCooldown}s`
+                        : "Resend Code"}
+                    </span>
+                  </button>
+                </div>
+                <div className="relative">
+                  <KeyRound className="w-4 h-4 text-slate-500 absolute left-3.5 top-3.5" />
+                  <input
+                    id="otp-code-input"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={6}
+                    autoFocus
+                    value={otpCode}
+                    onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    required
+                    placeholder="123456"
+                    className="w-full bg-[#070B14] border border-cyan-500/50 rounded-xl pl-10 pr-4 py-3 text-lg text-center tracking-[8px] font-mono font-bold text-cyan-300 placeholder-slate-600 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
+                  />
+                </div>
+              </div>
+
+              <button
+                id="btn-submit-otp"
+                type="submit"
+                disabled={loading || otpCode.trim().length !== 6 || expirySecondsLeft <= 0}
+                className="w-full mt-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/60 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {loading ? "Verifying Passcode..." : "Verify & Open Console"}
+                <CheckCircle2 className="w-4 h-4" />
+              </button>
+
+              <div className="pt-3 text-center border-t border-slate-800/80">
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleModeChange("login");
+                    setOtpCode("");
+                  }}
+                  className="text-xs text-slate-400 hover:text-cyan-400 cursor-pointer"
+                >
+                  &larr; Back to Email & Password Sign In
                 </button>
               </div>
             </form>

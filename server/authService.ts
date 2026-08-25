@@ -29,6 +29,32 @@ export function generateSessionId(): string {
   return "szen_sess_" + crypto.randomBytes(32).toString("hex");
 }
 
+export function generate6DigitOtp(): string {
+  // Cryptographically secure uniform random integer between 100000 and 999999 inclusive
+  return crypto.randomInt(100000, 1000000).toString();
+}
+
+export function maskEmail(email: string): string {
+  if (!email || !email.includes("@")) return "u***@***.***";
+  const [local, domain] = email.split("@");
+  if (local.length <= 2) {
+    return `${local[0]}*@${domain}`;
+  }
+  const maskedLocal = local[0] + "*".repeat(Math.max(4, local.length - 2)) + local[local.length - 1];
+  return `${maskedLocal}@${domain}`;
+}
+
+export function timingSafeCompareHash(a: string, b: string): boolean {
+  try {
+    const bufA = Buffer.from(a, "utf-8");
+    const bufB = Buffer.from(b, "utf-8");
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+  } catch {
+    return false;
+  }
+}
+
 export function getClearanceForRole(role: string): string {
   switch (role) {
     case "admin":

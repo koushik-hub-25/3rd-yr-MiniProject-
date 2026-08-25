@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import crypto from "crypto";
 import multer from "multer";
 import cookieParser from "cookie-parser";
 import bcrypt from "bcryptjs";
@@ -27,8 +28,9 @@ import {
   users,
   sessions,
   auditLogs,
+  loginOtpChallenges,
 } from "./src/db/schema";
-import { eq, desc, asc, sql, count, like, and, gt } from "drizzle-orm";
+import { eq, desc, asc, sql, count, like, and, gt, isNull } from "drizzle-orm";
 import { analyzeIntelligenceReport } from "./server/ai";
 import { generateSyntheticCTIDatabase } from "./server/seedData";
 import { fetchNvdCve, getAllRecentNvdVulnerabilities } from "./server/nvdService";
@@ -65,6 +67,7 @@ import {
 import {
   sendVerificationEmail,
   sendPasswordResetEmail,
+  sendOtpEmail,
   getRecentTestEmails
 } from "./server/emailService";
 import {
@@ -73,6 +76,9 @@ import {
   hashToken,
   generateSecureToken,
   generateSessionId,
+  generate6DigitOtp,
+  maskEmail,
+  timingSafeCompareHash,
   logAuditEvent,
   getUserFromSession,
   extractSessionToken,
@@ -2473,7 +2479,7 @@ async function startServer() {
     }
   });
 
-  // User Login
+  // User Login (Step 1: Verify credentials and issue OTP challenge)
   app.post("/api/auth/login", async (req, res) => {
     try {
       const { email, password } = req.body;
@@ -2524,12 +2530,195 @@ async function startServer() {
         });
       }
 
-      // Record successful login
+      // Invalidate any previous active OTP challenges for this user
+      await db.update(loginOtpChallenges).set({
+        invalidatedAt: new Date()
+      }).where(
+        and(
+          eq(loginOtpChallenges.userId, user.id),
+          isNull(loginOtpChallenges.verifiedAt),
+          isNull(loginOtpChallenges.invalidatedAt)
+        )
+      );
+
+      // Generate cryptographically secure 6-digit OTP
+      const rawOtp = generate6DigitOtp();
+      const otpHash = hashToken(rawOtp);
+      const challengeId = "otp_ch_" + crypto.randomBytes(16).toString("hex");
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes expiration
+
+      await db.insert(loginOtpChallenges).values({
+        id: challengeId,
+        userId: user.id,
+        otpHash,
+        expiresAt,
+        attempts: 0,
+        createdAt: new Date(),
+      });
+
+      // Dispatch OTP email
+      try {
+        await sendOtpEmail(user.email, user.name, rawOtp);
+      } catch (mailErr: any) {
+        console.warn("[Auth] OTP email dispatch warning:", mailErr?.message);
+      }
+
+      await logAuditEvent({
+        userId: user.id,
+        userEmail: normalizedEmail,
+        action: "LOGIN_PASSWORD_SUCCESS_OTP_REQUIRED",
+        resourceType: "USER",
+        resourceId: user.id,
+        ipAddress: clientIp,
+        details: { challengeId }
+      });
+
+      await logAuditEvent({
+        userId: user.id,
+        userEmail: normalizedEmail,
+        action: "OTP_SENT",
+        resourceType: "OTP_CHALLENGE",
+        resourceId: challengeId,
+        ipAddress: clientIp
+      });
+
+      // DO NOT create session yet. Return OTP challenge details with masked email.
+      res.json({
+        success: true,
+        otpRequired: true,
+        challengeId,
+        maskedEmail: maskEmail(user.email),
+        expiresAt: expiresAt.toISOString(),
+        resendCooldown: 30
+      });
+    } catch (err: any) {
+      console.error("[Auth] Login error:", err);
+      res.status(500).json({ error: "Login authentication failed: " + err?.message });
+    }
+  });
+
+  // Verify Login OTP (Step 2: Verify 6-digit code and issue session cookie)
+  app.post("/api/auth/verify-otp", async (req, res) => {
+    try {
+      const { challengeId, otp } = req.body;
+      const clientIp = req.ip || req.socket.remoteAddress;
+
+      if (!challengeId || typeof challengeId !== "string" || !otp || typeof otp !== "string") {
+        return res.status(400).json({ error: "Both challenge ID and 6-digit verification code are required." });
+      }
+
+      const cleanOtp = otp.trim();
+      if (!/^\d{6}$/.test(cleanOtp)) {
+        return res.status(400).json({ error: "Verification code must be exactly 6 digits." });
+      }
+
+      const challenge = await db.query.loginOtpChallenges.findFirst({
+        where: eq(loginOtpChallenges.id, challengeId)
+      });
+
+      if (!challenge || challenge.invalidatedAt !== null || challenge.verifiedAt !== null) {
+        return res.status(400).json({ error: "Invalid or expired verification session. Please sign in again." });
+      }
+
+      // Check Expiration (5 minutes)
+      if (new Date(challenge.expiresAt) < new Date()) {
+        await db.update(loginOtpChallenges).set({
+          invalidatedAt: new Date()
+        }).where(eq(loginOtpChallenges.id, challenge.id));
+
+        await logAuditEvent({
+          userId: challenge.userId,
+          action: "OTP_EXPIRED",
+          resourceType: "OTP_CHALLENGE",
+          resourceId: challenge.id,
+          ipAddress: clientIp
+        });
+
+        return res.status(400).json({ error: "Verification code has expired. Please request a new code." });
+      }
+
+      // Check Attempt Limit (Max 5 attempts)
+      if (challenge.attempts >= 5) {
+        await db.update(loginOtpChallenges).set({
+          invalidatedAt: new Date()
+        }).where(eq(loginOtpChallenges.id, challenge.id));
+
+        await logAuditEvent({
+          userId: challenge.userId,
+          action: "OTP_MAX_ATTEMPTS_EXCEEDED",
+          resourceType: "OTP_CHALLENGE",
+          resourceId: challenge.id,
+          ipAddress: clientIp
+        });
+
+        return res.status(400).json({ error: "Maximum verification attempts exceeded. Please sign in again." });
+      }
+
+      const candidateHash = hashToken(cleanOtp);
+      const isMatch = timingSafeCompareHash(candidateHash, challenge.otpHash);
+
+      if (!isMatch) {
+        const newAttempts = challenge.attempts + 1;
+        const isMaxReached = newAttempts >= 5;
+
+        await db.update(loginOtpChallenges).set({
+          attempts: newAttempts,
+          invalidatedAt: isMaxReached ? new Date() : null
+        }).where(eq(loginOtpChallenges.id, challenge.id));
+
+        await logAuditEvent({
+          userId: challenge.userId,
+          action: isMaxReached ? "OTP_MAX_ATTEMPTS_EXCEEDED" : "OTP_VERIFICATION_FAILED",
+          resourceType: "OTP_CHALLENGE",
+          resourceId: challenge.id,
+          ipAddress: clientIp,
+          details: { attempt: newAttempts, remaining: Math.max(0, 5 - newAttempts) }
+        });
+
+        if (isMaxReached) {
+          return res.status(400).json({
+            error: "Maximum verification attempts exceeded. This code is now invalidated. Please sign in again.",
+            invalidated: true
+          });
+        }
+
+        return res.status(401).json({
+          error: `Invalid verification code. ${5 - newAttempts} attempt(s) remaining.`,
+          attemptsRemaining: 5 - newAttempts
+        });
+      }
+
+      // Successful OTP Verification
+      await db.update(loginOtpChallenges).set({
+        verifiedAt: new Date()
+      }).where(eq(loginOtpChallenges.id, challenge.id));
+
+      // Invalidate any other active challenges for this user
+      await db.update(loginOtpChallenges).set({
+        invalidatedAt: new Date()
+      }).where(
+        and(
+          eq(loginOtpChallenges.userId, challenge.userId),
+          isNull(loginOtpChallenges.verifiedAt),
+          isNull(loginOtpChallenges.invalidatedAt)
+        )
+      );
+
+      const user = await db.query.users.findFirst({
+        where: eq(users.id, challenge.userId)
+      });
+
+      if (!user) {
+        return res.status(404).json({ error: "User account not found." });
+      }
+
+      // Update user last login
       await db.update(users).set({
         lastLogin: new Date(),
         updatedAt: new Date()
       }).where(eq(users.id, user.id));
 
+      // Create authenticated database session
       const sessionId = generateSessionId();
       const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
 
@@ -2552,8 +2741,17 @@ async function startServer() {
 
       await logAuditEvent({
         userId: user.id,
-        userEmail: normalizedEmail,
-        action: "LOGIN_SUCCESS",
+        userEmail: user.email,
+        action: "OTP_VERIFICATION_SUCCEEDED",
+        resourceType: "OTP_CHALLENGE",
+        resourceId: challenge.id,
+        ipAddress: clientIp
+      });
+
+      await logAuditEvent({
+        userId: user.id,
+        userEmail: user.email,
+        action: "LOGIN_2FA_SUCCESS",
         resourceType: "USER",
         resourceId: user.id,
         ipAddress: clientIp
@@ -2567,8 +2765,105 @@ async function startServer() {
         token: sessionId
       });
     } catch (err: any) {
-      console.error("[Auth] Login error:", err);
-      res.status(500).json({ error: "Login authentication failed: " + err?.message });
+      console.error("[Auth] Verify OTP error:", err);
+      res.status(500).json({ error: "Failed to verify code: " + err?.message });
+    }
+  });
+
+  // Resend Login OTP
+  app.post("/api/auth/resend-otp", async (req, res) => {
+    try {
+      const { challengeId } = req.body;
+      const clientIp = req.ip || req.socket.remoteAddress;
+
+      if (!challengeId || typeof challengeId !== "string") {
+        return res.status(400).json({ error: "Challenge ID is required." });
+      }
+
+      const challenge = await db.query.loginOtpChallenges.findFirst({
+        where: eq(loginOtpChallenges.id, challengeId)
+      });
+
+      if (!challenge || challenge.verifiedAt !== null) {
+        return res.status(400).json({ error: "Invalid verification session. Please sign in again." });
+      }
+
+      // Check 30-second cooldown from challenge creation
+      const now = Date.now();
+      const createdAtMs = new Date(challenge.createdAt).getTime();
+      const elapsedSec = (now - createdAtMs) / 1000;
+
+      if (elapsedSec < 30) {
+        const waitSec = Math.ceil(30 - elapsedSec);
+        return res.status(429).json({
+          error: `Please wait ${waitSec} seconds before requesting a new code.`,
+          resendCooldown: waitSec
+        });
+      }
+
+      // Invalidate old challenge
+      await db.update(loginOtpChallenges).set({
+        invalidatedAt: new Date()
+      }).where(eq(loginOtpChallenges.id, challenge.id));
+
+      const user = await db.query.users.findFirst({
+        where: eq(users.id, challenge.userId)
+      });
+
+      if (!user) {
+        return res.status(404).json({ error: "User account not found." });
+      }
+
+      // Generate new 6-digit OTP
+      const rawOtp = generate6DigitOtp();
+      const otpHash = hashToken(rawOtp);
+      const newChallengeId = "otp_ch_" + crypto.randomBytes(16).toString("hex");
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+
+      await db.insert(loginOtpChallenges).values({
+        id: newChallengeId,
+        userId: user.id,
+        otpHash,
+        expiresAt,
+        attempts: 0,
+        createdAt: new Date(),
+      });
+
+      try {
+        await sendOtpEmail(user.email, user.name, rawOtp);
+      } catch (mailErr: any) {
+        console.warn("[Auth] Resend OTP email warning:", mailErr?.message);
+      }
+
+      await logAuditEvent({
+        userId: user.id,
+        userEmail: user.email,
+        action: "OTP_RESEND_REQUESTED",
+        resourceType: "OTP_CHALLENGE",
+        resourceId: newChallengeId,
+        ipAddress: clientIp
+      });
+
+      await logAuditEvent({
+        userId: user.id,
+        userEmail: user.email,
+        action: "OTP_SENT",
+        resourceType: "OTP_CHALLENGE",
+        resourceId: newChallengeId,
+        ipAddress: clientIp
+      });
+
+      res.json({
+        success: true,
+        challengeId: newChallengeId,
+        maskedEmail: maskEmail(user.email),
+        expiresAt: expiresAt.toISOString(),
+        resendCooldown: 30,
+        message: "A new 6-digit verification code has been dispatched."
+      });
+    } catch (err: any) {
+      console.error("[Auth] Resend OTP error:", err);
+      res.status(500).json({ error: "Failed to resend code: " + err?.message });
     }
   });
 
@@ -2732,6 +3027,17 @@ async function startServer() {
 
       // Invalidate all active sessions for security
       await db.delete(sessions).where(eq(sessions.userId, user.id));
+
+      // Invalidate all pending OTP challenges for security
+      await db.update(loginOtpChallenges).set({
+        invalidatedAt: new Date()
+      }).where(
+        and(
+          eq(loginOtpChallenges.userId, user.id),
+          isNull(loginOtpChallenges.verifiedAt),
+          isNull(loginOtpChallenges.invalidatedAt)
+        )
+      );
 
       await logAuditEvent({
         userId: user.id,

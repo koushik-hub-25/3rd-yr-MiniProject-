@@ -448,6 +448,19 @@ async function createTables() {
       details TEXT
     );
   `);
+
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS login_otp_challenges (
+      id TEXT PRIMARY KEY,
+      userId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      otpHash TEXT NOT NULL,
+      expiresAt INTEGER NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      verifiedAt INTEGER,
+      invalidatedAt INTEGER
+    );
+  `);
 }
 
 export async function initDatabaseTables(): Promise<void> {
