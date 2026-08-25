@@ -69,7 +69,11 @@ async function configurePragmas() {
     await activeClient.execute("PRAGMA journal_mode = WAL;");
     await activeClient.execute("PRAGMA synchronous = NORMAL;");
     await activeClient.execute("PRAGMA busy_timeout = 10000;");
-  } catch (err) {
+  } catch (err: any) {
+    const msg = String(err?.message || err || "");
+    if (msg.includes("SQLITE_CORRUPT") || msg.includes("malformed") || msg.includes("corrupt") || msg.includes("disk image")) {
+      throw err;
+    }
     console.warn("[DB] Warning configuring pragmas:", err);
   }
 }
@@ -405,11 +409,22 @@ async function createTables() {
 
 export async function initDatabaseTables(): Promise<void> {
   try {
+    // Verify database file health with quick check
+    await activeClient.execute("PRAGMA schema_version;");
     await configurePragmas();
     await createTables();
   } catch (err: any) {
-    console.error("[DB] Database initialization error:", err?.message || err);
-    throw err;
+    const msg = String(err?.message || err || "");
+    if (msg.includes("SQLITE_CORRUPT") || msg.includes("malformed") || msg.includes("corrupt") || msg.includes("disk image")) {
+      console.error("[DB] Corrupted SQLite database detected during startup. Safely recreating clean database...", msg);
+      resetDatabase();
+      await configurePragmas();
+      await createTables();
+      console.log("[DB] Clean database recreated successfully after corruption recovery.");
+    } else {
+      console.error("[DB] Database initialization error:", msg);
+      throw err;
+    }
   }
 }
 

@@ -71,6 +71,13 @@ async function seedDatabaseIfEmpty() {
       existingCount = Number(existing[0]?.count || 0);
     } catch (queryErr: any) {
       console.warn("[DB] Non-blocking warning reading reports count:", queryErr?.message);
+      const msg = String(queryErr?.message || queryErr || "");
+      if (msg.includes("SQLITE_CORRUPT") || msg.includes("malformed") || msg.includes("corrupt") || msg.includes("disk image")) {
+        console.error("[DB] Corrupted SQLite database detected during count. Recreating fresh clean database...", msg);
+        resetDatabase();
+        await initDatabaseTables();
+        await initializeIntelligenceSources();
+      }
       existingCount = 0;
     }
 
