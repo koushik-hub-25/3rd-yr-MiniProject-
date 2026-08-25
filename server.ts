@@ -3074,8 +3074,8 @@ async function startServer() {
     }
   });
 
-  // --- Admin Database Explorer ---
-  app.get("/api/admin/database/tables", authenticate, requireAdmin, async (req: AuthenticatedRequest, res) => {
+  // --- Admin & Analyst Database Explorer ---
+  app.get("/api/admin/database/tables", authenticate, async (req: AuthenticatedRequest, res) => {
     try {
       const tables = [
         "reports", "threats", "entities", "iocs", "incidents", "recommendations",
@@ -3098,7 +3098,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/admin/database/table/:tableName", authenticate, requireAdmin, async (req: AuthenticatedRequest, res) => {
+  app.get("/api/admin/database/table/:tableName", authenticate, async (req: AuthenticatedRequest, res) => {
     try {
       const allowedTables = [
         "reports", "threats", "entities", "iocs", "incidents", "recommendations",

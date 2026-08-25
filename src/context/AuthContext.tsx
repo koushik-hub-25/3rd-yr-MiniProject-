@@ -13,12 +13,14 @@ export interface AuthResult {
   resendCooldown?: number;
   email?: string;
   user?: UserProfile;
+  token?: string;
 }
 
 interface AuthContextType {
   user: UserProfile | null;
   isAuthenticated: boolean;
   loading: boolean;
+  token: string | null;
   login: (email: string, password: string) => Promise<AuthResult>;
   verifyOtp: (challengeId: string, otp: string) => Promise<AuthResult>;
   resendOtp: (challengeId: string) => Promise<{ success: boolean; challengeId?: string; maskedEmail?: string; expiresAt?: string; resendCooldown?: number; message?: string; error?: string }>;
@@ -29,24 +31,49 @@ interface AuthContextType {
   resetPassword: (email: string, token: string, newPassword: string) => Promise<AuthResult>;
   logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
+  getAuthHeaders: () => Record<string, string>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [token, setToken] = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("szen_session_token");
+    }
+    return null;
+  });
   const [loading, setLoading] = useState<boolean>(true);
+
+  const getAuthHeaders = useCallback((): Record<string, string> => {
+    const activeToken = token || (typeof window !== "undefined" ? localStorage.getItem("szen_session_token") : null);
+    const headers: Record<string, string> = {
+      "Accept": "application/json"
+    };
+    if (activeToken) {
+      headers["Authorization"] = `Bearer ${activeToken}`;
+      headers["x-session-token"] = activeToken;
+    }
+    return headers;
+  }, [token]);
 
   // Restore authenticated session from server on startup
   const refreshProfile = useCallback(async () => {
     try {
-      const res = await fetch("/api/auth/me", {
-        headers: { "Accept": "application/json" }
-      });
+      const activeToken = typeof window !== "undefined" ? localStorage.getItem("szen_session_token") : null;
+      const headers: Record<string, string> = { "Accept": "application/json" };
+      if (activeToken) {
+        headers["Authorization"] = `Bearer ${activeToken}`;
+        headers["x-session-token"] = activeToken;
+      }
+
+      const res = await fetch("/api/auth/me", { headers });
       if (res.ok) {
         const data = await res.json();
         if (data && data.user) {
           setUser(data.user);
+          if (activeToken) setToken(activeToken);
         } else {
           setUser(null);
         }
@@ -88,8 +115,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (res.ok && data.success && data.user) {
+        if (data.token) {
+          localStorage.setItem("szen_session_token", data.token);
+          setToken(data.token);
+        }
         setUser(data.user);
-        return { success: true, user: data.user };
+        return { success: true, user: data.user, token: data.token };
       }
 
       // Explicitly check for unverified email status
@@ -124,8 +155,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const data = await res.json();
 
       if (res.ok && data.success && data.user) {
+        if (data.token) {
+          localStorage.setItem("szen_session_token", data.token);
+          setToken(data.token);
+        }
         setUser(data.user);
-        return { success: true, user: data.user };
+        return { success: true, user: data.user, token: data.token };
       }
 
       return {
@@ -213,13 +248,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const data = await res.json();
 
       if (res.ok && data.success) {
+        if (data.token) {
+          localStorage.setItem("szen_session_token", data.token);
+          setToken(data.token);
+        }
         if (data.user) {
           setUser(data.user);
         }
         return {
           success: true,
           message: data.message || "Email verified successfully!",
-          user: data.user
+          user: data.user,
+          token: data.token
         };
       }
 
@@ -321,10 +361,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = async () => {
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      const activeToken = token || (typeof window !== "undefined" ? localStorage.getItem("szen_session_token") : null);
+      const headers: Record<string, string> = {};
+      if (activeToken) {
+        headers["Authorization"] = `Bearer ${activeToken}`;
+        headers["x-session-token"] = activeToken;
+      }
+      await fetch("/api/auth/logout", { method: "POST", headers });
     } catch (e) {
       console.warn("[Auth] Logout API call error:", e);
     } finally {
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("szen_session_token");
+      }
+      setToken(null);
       setUser(null);
     }
   };
@@ -335,6 +385,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         isAuthenticated: !!user,
         loading,
+        token,
         login,
         verifyOtp,
         resendOtp,
@@ -344,7 +395,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         forgotPassword,
         resetPassword,
         logout,
-        refreshProfile
+        refreshProfile,
+        getAuthHeaders
       }}
     >
       {children}

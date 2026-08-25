@@ -8,10 +8,11 @@ import {
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent, Badge, cn } from "../components/ui";
 import { IntelligenceSourceInfo, IntelligenceFeedItem } from "../types";
+import DatabaseExplorer from "./DatabaseExplorer";
 
 export default function Settings() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<"profile" | "ai" | "sources" | "feed" | "alerts" | "audit" | "system">("sources");
+  const [activeTab, setActiveTab] = useState<"profile" | "ai" | "sources" | "feed" | "alerts" | "audit" | "system" | "database">("sources");
   const [dataSources, setDataSources] = useState<IntelligenceSourceInfo[]>([]);
   const [lastSystemSync, setLastSystemSync] = useState<string>("");
   const [config, setConfig] = useState<any>(null);
@@ -154,6 +155,7 @@ export default function Settings() {
   const tabs = [
     { id: "sources", label: "Data Sources & Provenance", icon: Database },
     { id: "feed", label: "Live Threat Feeds (NVD & KEV)", icon: Globe },
+    { id: "database", label: "Database Explorer", icon: HardDrive },
     { id: "ai", label: "AI Engine Configuration", icon: Cpu },
     { id: "profile", label: "Analyst Profile", icon: User },
     { id: "audit", label: "Security & Audit Trail", icon: Lock },
@@ -750,25 +752,39 @@ export default function Settings() {
               )}
             </div>
 
-            {user?.role === "admin" && (
-              <div className="p-4 rounded-xl bg-[#070B14] border border-slate-800 space-y-3">
-                <div className="pt-3 flex items-center justify-between">
-                  <div>
-                    <span className="text-xs font-bold text-slate-200">Database Explorer (Admin Only)</span>
-                    <p className="text-[11px] text-slate-400">View actual SQLite database records in a secure, read-only environment.</p>
-                  </div>
+            <div className="p-4 rounded-xl bg-[#070B14] border border-slate-800 space-y-3">
+              <div className="pt-3 flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-slate-200">Database Explorer & Table Inspector</span>
+                  <p className="text-[11px] text-slate-400">View actual SQLite database records across all 24 security intelligence tables.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setActiveTab("database")}
+                    className="px-3.5 py-2 bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/30 rounded-xl text-xs font-bold transition-colors flex items-center gap-2"
+                  >
+                    <HardDrive className="w-3.5 h-3.5" />
+                    <span>View in Tab</span>
+                  </button>
                   <Link
                     to="/database-explorer"
                     className="px-3.5 py-2 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30 rounded-xl text-xs font-bold transition-colors flex items-center gap-2"
                   >
-                    <Database className="w-3.5 h-3.5" />
-                    <span>Open Explorer</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Full Screen</span>
                   </Link>
                 </div>
               </div>
-            )}
+            </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* Tab: Database Explorer */}
+      {activeTab === "database" && (
+        <div className="space-y-4">
+          <DatabaseExplorer />
+        </div>
       )}
 
       {/* Modal Detail for Selected Feed Item */}

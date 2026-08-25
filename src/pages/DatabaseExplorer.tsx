@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Database, Search, RefreshCw, AlertTriangle, ShieldCheck, Server, Table, Activity } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Database, Search, RefreshCw, AlertTriangle, ShieldCheck, Server, Table, Activity, LogIn, KeyRound } from "lucide-react";
 import { cn } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
 
@@ -16,7 +17,7 @@ type TableData = {
 };
 
 export default function DatabaseExplorer() {
-  const { user } = useAuth();
+  const { user, getAuthHeaders, token } = useAuth();
   const [tables, setTables] = useState<TableMeta[]>([]);
   const [selectedTable, setSelectedTable] = useState<string>("cachedVulnerabilities");
   const [tableData, setTableData] = useState<TableData | null>(null);
@@ -31,10 +32,15 @@ export default function DatabaseExplorer() {
       setApiDiagnostics((prev: any) => ({ ...prev, tablesStatus: "requesting" }));
       
       const hasSessionCookie = typeof document !== 'undefined' ? document.cookie.includes("szen_session=") : false;
+      const activeToken = typeof window !== 'undefined' ? localStorage.getItem("szen_session_token") : null;
       console.log("[DB EXPLORER] request origin:", window.location.origin);
       console.log("[DB EXPLORER] has szen_session in document.cookie:", hasSessionCookie);
+      console.log("[DB EXPLORER] has session token in storage:", !!activeToken);
 
-      const res = await fetch(`/api/admin/database/tables?t=${Date.now()}`);
+      const headers = getAuthHeaders();
+      const res = await fetch(`/api/admin/database/tables?t=${Date.now()}`, {
+        headers
+      });
       setApiDiagnostics((prev: any) => ({ ...prev, tablesUrl: res.url, tablesStatus: res.status }));
       if (res.ok) {
         const json = await res.json();
@@ -63,7 +69,10 @@ export default function DatabaseExplorer() {
     setLoading(true);
     try {
       setApiDiagnostics((prev: any) => ({ ...prev, tableDataStatus: "requesting" }));
-      const res = await fetch(`/api/admin/database/table/${tableName}?t=${Date.now()}`);
+      const headers = getAuthHeaders();
+      const res = await fetch(`/api/admin/database/table/${tableName}?t=${Date.now()}`, {
+        headers
+      });
       setApiDiagnostics((prev: any) => ({ ...prev, tableDataUrl: res.url, tableDataStatus: res.status }));
       
       if (res.ok) {
@@ -188,13 +197,28 @@ export default function DatabaseExplorer() {
         <h3 className="font-semibold text-white mb-2 uppercase">Database Explorer Connection Status</h3>
         <p>Browser Origin: {typeof window !== 'undefined' ? window.location.origin : 'SSR'}</p>
         <p>Has szen_session cookie: {typeof document !== 'undefined' ? (document.cookie.includes("szen_session=") ? 'Yes' : 'No') : 'SSR'}</p>
+        <p>Has session token in storage: {typeof window !== 'undefined' ? (localStorage.getItem("szen_session_token") ? 'Yes' : 'No') : 'SSR'}</p>
+        <p>Current User: {user ? `${user.email} (${user.role})` : 'None / Logged Out'}</p>
         <p>Tables API Status: {apiDiagnostics.tablesStatus}</p>
         <p>Table Data API Status: {apiDiagnostics.tableDataStatus}</p>
         <p>Tables Received: {tables.length}</p>
         <p>Rows Received: {tableData?.rows?.length || 0}</p>
         {errorMsg && (
-          <div className="mt-2 p-2 bg-red-900/30 border border-red-500 text-red-400 rounded-md">
-            <strong>ERROR: </strong> {errorMsg}
+          <div className="mt-3 p-3 bg-red-900/30 border border-red-500 text-red-300 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 font-sans">
+            <div>
+              <p className="font-mono text-xs text-red-400 font-semibold mb-1">ERROR: {errorMsg}</p>
+              <p className="text-xs text-slate-300">
+                Administrative clearance is required to query SQLite table schemas and records. If your session expired, please log in with your SOC Lead administrator credentials.
+              </p>
+            </div>
+            <Link
+              to="/login"
+              state={{ from: { pathname: "/database-explorer" } }}
+              className="inline-flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-md text-xs font-semibold shrink-0 transition-colors"
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              Log In as Administrator
+            </Link>
           </div>
         )}
       </div>

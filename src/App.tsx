@@ -108,6 +108,7 @@ function TopNavigation({ onOpenAiAssistant }: { onOpenAiAssistant: () => void })
   ];
 
   const moreNavItems = [
+    { name: "Database Explorer", path: "/database-explorer", icon: Database, desc: "SQLite database & table schemas" },
     { name: "Threat Actors", path: "/threat-actors", icon: Skull, desc: "Adversary intelligence dossiers" },
     { name: "Threat Campaigns", path: "/campaigns", icon: Flame, desc: "Multi-stage cyber operations" },
     { name: "Risk Scoring Engine", path: "/risk-engine", icon: Activity, desc: "Deterministic 0-100 scoring" },
@@ -283,6 +284,14 @@ function TopNavigation({ onOpenAiAssistant }: { onOpenAiAssistant: () => void })
                       className="w-full text-left px-4 py-2 text-xs text-slate-300 hover:text-white hover:bg-slate-800/60 flex items-center gap-2"
                     >
                       <SettingsIcon className="w-3.5 h-3.5 text-slate-400" /> System Settings
+                    </Link>
+
+                    <Link
+                      to="/database-explorer"
+                      onClick={() => setUserMenuOpen(false)}
+                      className="w-full text-left px-4 py-2 text-xs text-cyan-300 hover:text-cyan-200 hover:bg-slate-800/60 flex items-center gap-2"
+                    >
+                      <Database className="w-3.5 h-3.5 text-cyan-400" /> Database Explorer
                     </Link>
 
                     <button
@@ -469,11 +478,7 @@ function MainLayout() {
           <Route path="/emerging" element={<EmergingThreats />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/settings" element={<Settings />} />
-          <Route path="/database-explorer" element={
-            <AdminRoute>
-              <DatabaseExplorer />
-            </AdminRoute>
-          } />
+          <Route path="/database-explorer" element={<DatabaseExplorer />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

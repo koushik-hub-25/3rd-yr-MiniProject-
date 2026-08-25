@@ -206,12 +206,16 @@ export function extractSessionToken(req: Request): string | null {
     const match = req.headers.cookie.match(/szen_session=([^;]+)/);
     if (match) return decodeURIComponent(match[1]);
   }
-  // 2. Check Authorization Bearer header
+  // 2. Check cookie-parser cookies object
+  if ((req as any).cookies && (req as any).cookies.szen_session) {
+    return String((req as any).cookies.szen_session).trim();
+  }
+  // 3. Check Authorization Bearer header
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith("Bearer ")) {
     return authHeader.substring(7).trim();
   }
-  // 3. Check custom header
+  // 4. Check custom header
   if (req.headers["x-session-token"]) {
     return String(req.headers["x-session-token"]).trim();
   }
@@ -221,30 +225,30 @@ export function extractSessionToken(req: Request): string | null {
 export async function authenticate(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   const token = extractSessionToken(req);
 
-  const isDbEndpoint = req.originalUrl.includes("/api/admin/database");
+  const isDbEndpoint = req.originalUrl?.includes("/api/admin/database");
   if (isDbEndpoint) {
-    console.log(`[DIAGNOSTIC] ${req.method} ${req.originalUrl}`);
-    console.log(`[DIAGNOSTIC] extractSessionToken found token:`, !!token);
-    console.log(`[DIAGNOSTIC] req.headers.cookie present:`, !!req.headers.cookie);
+    console.log(`[DIAGNOSTIC] Endpoint: ${req.method} ${req.originalUrl}`);
+    console.log(`[DIAGNOSTIC] Has szen_session cookie in headers:`, Boolean(req.headers.cookie && req.headers.cookie.includes("szen_session")));
+    console.log(`[DIAGNOSTIC] Has session token extracted (cookie or header):`, Boolean(token));
   }
 
   if (!token) {
-    if (isDbEndpoint) console.log(`[DIAGNOSTIC] Returning 401 (No token)`);
+    if (isDbEndpoint) console.log(`[DIAGNOSTIC] authenticate: Session NOT found (No token provided) -> 401`);
     return res.status(401).json({ error: "Authentication required. Please log in." });
   }
 
   const user = await getUserFromSession(token);
   
   if (isDbEndpoint) {
-    console.log(`[DIAGNOSTIC] getUserFromSession returned user:`, !!user);
+    console.log(`[DIAGNOSTIC] authenticate: Session found in DB:`, Boolean(user));
     if (user) {
-      console.log(`[DIAGNOSTIC] User ID:`, user.id);
-      console.log(`[DIAGNOSTIC] User Role:`, user.role);
+      console.log(`[DIAGNOSTIC] User ID: ${user.id}`);
+      console.log(`[DIAGNOSTIC] User Role: ${user.role}`);
     }
   }
 
   if (!user) {
-    if (isDbEndpoint) console.log(`[DIAGNOSTIC] Returning 401 (Invalid session)`);
+    if (isDbEndpoint) console.log(`[DIAGNOSTIC] authenticate: Session expired or invalid in DB -> 401`);
     return res.status(401).json({ error: "Session expired or invalid. Please log in again." });
   }
 
@@ -267,10 +271,16 @@ export async function optionalAuthenticate(req: AuthenticatedRequest, res: Respo
 
 export function requireRole(...allowedRoles: string[]) {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    const isDbEndpoint = req.originalUrl?.includes("/api/admin/database");
     if (!req.user) {
+      if (isDbEndpoint) console.log(`[DIAGNOSTIC] requireRole: No user attached -> 401`);
       return res.status(401).json({ error: "Authentication required." });
     }
-    if (!allowedRoles.includes(req.user.role)) {
+    const passes = allowedRoles.includes(req.user.role);
+    if (isDbEndpoint) {
+      console.log(`[DIAGNOSTIC] requireAdmin/Role check: Allowed=[${allowedRoles.join(",")}], UserRole=${req.user.role}, Passes=${passes}`);
+    }
+    if (!passes) {
       return res.status(403).json({
         error: `Access forbidden: Role '${req.user.role}' lacks required clearance (${allowedRoles.join(", ")}).`
       });
