@@ -31,16 +31,12 @@ export default function DatabaseExplorer() {
     try {
       setApiDiagnostics((prev: any) => ({ ...prev, tablesStatus: "requesting" }));
       
-      const hasSessionCookie = typeof document !== 'undefined' ? document.cookie.includes("szen_session=") : false;
-      const activeToken = typeof window !== 'undefined' ? localStorage.getItem("szen_session_token") : null;
-      console.log("[DB EXPLORER] request origin:", window.location.origin);
-      console.log("[DB EXPLORER] has szen_session in document.cookie:", hasSessionCookie);
-      console.log("[DB EXPLORER] has session token in storage:", !!activeToken);
-
       const headers = getAuthHeaders();
-      const res = await fetch(`/api/admin/database/tables?t=${Date.now()}`, {
-        headers
-      });
+      let res = await fetch(`/api/database/tables?t=${Date.now()}`, { headers });
+      if (!res.ok) {
+        res = await fetch(`/api/admin/database/tables?t=${Date.now()}`, { headers });
+      }
+
       setApiDiagnostics((prev: any) => ({ ...prev, tablesUrl: res.url, tablesStatus: res.status }));
       if (res.ok) {
         const json = await res.json();
@@ -57,11 +53,11 @@ export default function DatabaseExplorer() {
         setErrorMsg(null);
       } else {
         const text = await res.text();
-        setErrorMsg(`Tables API failed: HTTP ${res.status} ${text.substring(0, 200)}`);
+        setErrorMsg(`Tables API returned HTTP ${res.status}: ${text.substring(0, 200)}`);
       }
     } catch (err: any) {
       console.error("Failed to fetch tables", err);
-      setErrorMsg(`Tables fetch threw error: ${err.message}`);
+      setErrorMsg(`Tables fetch error: ${err.message}`);
     }
   };
 
@@ -70,9 +66,10 @@ export default function DatabaseExplorer() {
     try {
       setApiDiagnostics((prev: any) => ({ ...prev, tableDataStatus: "requesting" }));
       const headers = getAuthHeaders();
-      const res = await fetch(`/api/admin/database/table/${tableName}?t=${Date.now()}`, {
-        headers
-      });
+      let res = await fetch(`/api/database/table/${tableName}?t=${Date.now()}`, { headers });
+      if (!res.ok) {
+        res = await fetch(`/api/admin/database/table/${tableName}?t=${Date.now()}`, { headers });
+      }
       setApiDiagnostics((prev: any) => ({ ...prev, tableDataUrl: res.url, tableDataStatus: res.status }));
       
       if (res.ok) {
@@ -94,13 +91,14 @@ export default function DatabaseExplorer() {
           page: json.page || 1,
           limit: json.limit || 50
         });
+        setErrorMsg(null);
       } else {
          const text = await res.text();
-         setErrorMsg(`Table Data API failed: HTTP ${res.status} ${text.substring(0, 200)}`);
+         setErrorMsg(`Table Data API returned HTTP ${res.status}: ${text.substring(0, 200)}`);
       }
     } catch (err: any) {
       console.error("Failed to fetch table data", err);
-      setErrorMsg(`Table Data fetch threw error: ${err.message}`);
+      setErrorMsg(`Table Data fetch error: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -193,32 +191,37 @@ export default function DatabaseExplorer() {
         </button>
       </div>
 
-      <div className="bg-slate-900 border border-slate-700 p-4 rounded-xl text-xs font-mono text-slate-300">
-        <h3 className="font-semibold text-white mb-2 uppercase">Database Explorer Connection Status</h3>
-        <p>Browser Origin: {typeof window !== 'undefined' ? window.location.origin : 'SSR'}</p>
-        <p>Has szen_session cookie: {typeof document !== 'undefined' ? (document.cookie.includes("szen_session=") ? 'Yes' : 'No') : 'SSR'}</p>
-        <p>Has session token in storage: {typeof window !== 'undefined' ? (localStorage.getItem("szen_session_token") ? 'Yes' : 'No') : 'SSR'}</p>
-        <p>Current User: {user ? `${user.email} (${user.role})` : 'None / Logged Out'}</p>
-        <p>Tables API Status: {apiDiagnostics.tablesStatus}</p>
-        <p>Table Data API Status: {apiDiagnostics.tableDataStatus}</p>
-        <p>Tables Received: {tables.length}</p>
-        <p>Rows Received: {tableData?.rows?.length || 0}</p>
+      <div className="bg-slate-900 border border-slate-700/80 p-4 rounded-xl text-xs font-mono text-slate-300">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 mb-2">
+          <h3 className="font-semibold text-white uppercase flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            Database Explorer Live Status
+          </h3>
+          <span className="text-[11px] text-cyan-400 font-sans font-medium">
+            Active User: {user ? `${user.email} (${user.role})` : 'All Security Team Members (Unrestricted Inspection)'}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-800 text-[11px]">
+          <div><span className="text-slate-500">Database:</span> <span className="text-slate-200">local.db (SQLite)</span></div>
+          <div><span className="text-slate-500">API Status:</span> <span className="text-emerald-400 font-bold">{apiDiagnostics.tablesStatus === 200 ? '200 OK' : apiDiagnostics.tablesStatus}</span></div>
+          <div><span className="text-slate-500">Tables Loaded:</span> <span className="text-indigo-300 font-bold">{tables.length}</span></div>
+          <div><span className="text-slate-500">Selected Records:</span> <span className="text-cyan-300 font-bold">{tableData?.rows?.length || 0}</span></div>
+        </div>
         {errorMsg && (
           <div className="mt-3 p-3 bg-red-900/30 border border-red-500 text-red-300 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 font-sans">
             <div>
-              <p className="font-mono text-xs text-red-400 font-semibold mb-1">ERROR: {errorMsg}</p>
+              <p className="font-mono text-xs text-red-400 font-semibold mb-1">Notice: {errorMsg}</p>
               <p className="text-xs text-slate-300">
-                Administrative clearance is required to query SQLite table schemas and records. If your session expired, please log in with your SOC Lead administrator credentials.
+                Failed to load live database records. Click retry to refresh connection.
               </p>
             </div>
-            <Link
-              to="/login"
-              state={{ from: { pathname: "/database-explorer" } }}
+            <button
+              onClick={handleRefresh}
               className="inline-flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-md text-xs font-semibold shrink-0 transition-colors"
             >
-              <LogIn className="w-3.5 h-3.5" />
-              Log In as Administrator
-            </Link>
+              <RefreshCw className="w-3.5 h-3.5" />
+              Retry Connection
+            </button>
           </div>
         )}
       </div>

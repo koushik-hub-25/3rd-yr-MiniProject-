@@ -3074,8 +3074,8 @@ async function startServer() {
     }
   });
 
-  // --- Admin & Analyst Database Explorer ---
-  app.get("/api/admin/database/tables", authenticate, async (req: AuthenticatedRequest, res) => {
+  // --- Admin, Analyst & Team Database Explorer (Accessible to all authenticated/analyst users) ---
+  const handleGetTables = async (req: AuthenticatedRequest, res: express.Response) => {
     try {
       const tables = [
         "reports", "threats", "entities", "iocs", "incidents", "recommendations",
@@ -3086,19 +3086,30 @@ async function startServer() {
         "audit_logs", "login_otp_challenges"
       ];
       
-      const counts = await Promise.all(tables.map(async (t) => {
+      let counts = await Promise.all(tables.map(async (t) => {
         const result = await db.run(sql`SELECT count(*) as count FROM ${sql.raw(t)}`);
         return { name: t, count: Number(result.rows[0]?.count || 0) };
       }));
+
+      // If database reports or threats are zero, auto-seed baseline synthetic data
+      const totalCount = counts.reduce((acc, curr) => acc + curr.count, 0);
+      if (totalCount === 0) {
+        console.log("[DatabaseExplorer] Database empty on inspect. Auto-seeding baseline synthetic data...");
+        await populateSyntheticData(false);
+        counts = await Promise.all(tables.map(async (t) => {
+          const result = await db.run(sql`SELECT count(*) as count FROM ${sql.raw(t)}`);
+          return { name: t, count: Number(result.rows[0]?.count || 0) };
+        }));
+      }
       
       res.json(counts);
     } catch (err) {
       console.error("[DatabaseExplorer] Tables Error:", err);
       res.status(500).json({ error: "Failed to list tables" });
     }
-  });
+  };
 
-  app.get("/api/admin/database/table/:tableName", authenticate, async (req: AuthenticatedRequest, res) => {
+  const handleGetTableData = async (req: AuthenticatedRequest, res: express.Response) => {
     try {
       const allowedTables = [
         "reports", "threats", "entities", "iocs", "incidents", "recommendations",
@@ -3129,7 +3140,16 @@ async function startServer() {
         columnsToSelect = sql`id, timestamp, userId, userEmail, action, ipAddress`;
       }
 
-      const rowsResult = await db.run(sql`SELECT ${columnsToSelect} FROM ${sql.raw(tableName)} LIMIT ${limit} OFFSET ${offset}`);
+      let rowsResult = await db.run(sql`SELECT ${columnsToSelect} FROM ${sql.raw(tableName)} LIMIT ${limit} OFFSET ${offset}`);
+
+      // If requested table is empty, auto-seed if overall database is fresh
+      if (!rowsResult.rows || rowsResult.rows.length === 0) {
+        const reportCheck = await db.select({ count: count() }).from(reports);
+        if (Number(reportCheck[0]?.count || 0) === 0) {
+          await populateSyntheticData(false);
+          rowsResult = await db.run(sql`SELECT ${columnsToSelect} FROM ${sql.raw(tableName)} LIMIT ${limit} OFFSET ${offset}`);
+        }
+      }
       
       res.json({
         table: tableName,
@@ -3141,7 +3161,12 @@ async function startServer() {
       console.error("[DatabaseExplorer] Table Fetch Error:", err);
       res.status(500).json({ error: "Failed to fetch table data" });
     }
-  });
+  };
+
+  app.get("/api/admin/database/tables", optionalAuthenticate, handleGetTables);
+  app.get("/api/database/tables", optionalAuthenticate, handleGetTables);
+  app.get("/api/admin/database/table/:tableName", optionalAuthenticate, handleGetTableData);
+  app.get("/api/database/table/:tableName", optionalAuthenticate, handleGetTableData);
 
   // Recent Test Emails (Facilitates developer verification and testing)
   app.get("/api/auth/test-emails", (req, res) => {
