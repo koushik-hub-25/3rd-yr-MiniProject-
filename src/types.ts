@@ -262,14 +262,30 @@ export interface CorrelatedThreatIntel {
   explainableRiskAssessment?: ExplainableRiskAssessment | null;
 }
 
+export type UserRole = 'analyst' | 'senior_analyst' | 'admin';
+
 export interface UserProfile {
   id: string;
   name: string;
   email: string;
-  role: string;
+  role: UserRole | string;
   clearance?: string;
+  emailVerified?: boolean;
   lastLogin?: string;
   avatarInitials: string;
+  createdAt?: string;
+}
+
+export interface AuditLog {
+  id: string;
+  userId?: string | null;
+  userEmail?: string | null;
+  action: string;
+  resourceType?: string | null;
+  resourceId?: string | null;
+  timestamp: string | Date;
+  ipAddress?: string | null;
+  details?: string | null;
 }
 
 export interface SystemNotification {

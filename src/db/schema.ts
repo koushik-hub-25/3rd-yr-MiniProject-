@@ -268,4 +268,41 @@ export const cachedVulnerabilities = sqliteTable("cachedVulnerabilities", {
   lastSyncedAt: integer("lastSyncedAt", { mode: "timestamp" }).notNull().default(sql`(strftime('%s', 'now'))`),
 });
 
+export const users = sqliteTable("users", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  email: text("email").notNull().unique(),
+  passwordHash: text("passwordHash").notNull(),
+  role: text("role").notNull().default("analyst"), // 'analyst', 'senior_analyst', 'admin'
+  emailVerified: integer("emailVerified").notNull().default(0), // 0 = false, 1 = true
+  verificationTokenHash: text("verificationTokenHash"),
+  verificationTokenExpiresAt: integer("verificationTokenExpiresAt", { mode: "timestamp" }),
+  resetPasswordTokenHash: text("resetPasswordTokenHash"),
+  resetPasswordTokenExpiresAt: integer("resetPasswordTokenExpiresAt", { mode: "timestamp" }),
+  createdAt: integer("createdAt", { mode: "timestamp" }).notNull().default(sql`(strftime('%s', 'now'))`),
+  updatedAt: integer("updatedAt", { mode: "timestamp" }).notNull().default(sql`(strftime('%s', 'now'))`),
+  lastLogin: integer("lastLogin", { mode: "timestamp" }),
+});
+
+export const sessions = sqliteTable("sessions", {
+  id: text("id").primaryKey(),
+  userId: text("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  expiresAt: integer("expiresAt", { mode: "timestamp" }).notNull(),
+  createdAt: integer("createdAt", { mode: "timestamp" }).notNull().default(sql`(strftime('%s', 'now'))`),
+  ipAddress: text("ipAddress"),
+  userAgent: text("userAgent"),
+});
+
+export const auditLogs = sqliteTable("audit_logs", {
+  id: text("id").primaryKey(),
+  userId: text("userId"),
+  userEmail: text("userEmail"),
+  action: text("action").notNull(),
+  resourceType: text("resourceType"),
+  resourceId: text("resourceId"),
+  timestamp: integer("timestamp", { mode: "timestamp" }).notNull().default(sql`(strftime('%s', 'now'))`),
+  ipAddress: text("ipAddress"),
+  details: text("details"),
+});
+
 

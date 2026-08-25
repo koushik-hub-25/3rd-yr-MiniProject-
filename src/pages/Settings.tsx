@@ -10,12 +10,14 @@ import { IntelligenceSourceInfo, IntelligenceFeedItem } from "../types";
 
 export default function Settings() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<"profile" | "ai" | "sources" | "feed" | "alerts" | "system">("sources");
+  const [activeTab, setActiveTab] = useState<"profile" | "ai" | "sources" | "feed" | "alerts" | "audit" | "system">("sources");
   const [dataSources, setDataSources] = useState<IntelligenceSourceInfo[]>([]);
   const [lastSystemSync, setLastSystemSync] = useState<string>("");
   const [config, setConfig] = useState<any>(null);
   const [resetting, setResetting] = useState(false);
   const [resetMessage, setResetMessage] = useState<string | null>(null);
+  const [auditLogsList, setAuditLogsList] = useState<any[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
 
   // Syncing state per source
   const [syncingSource, setSyncingSource] = useState<string | null>(null);
@@ -70,6 +72,14 @@ export default function Settings() {
   useEffect(() => {
     if (activeTab === "feed") {
       fetchFeed();
+    }
+    if (activeTab === "audit") {
+      setAuditLoading(true);
+      fetch("/api/auth/audit-logs")
+        .then(res => res.json())
+        .then(data => setAuditLogsList(Array.isArray(data) ? data : []))
+        .catch(err => console.error("Error fetching audit logs:", err))
+        .finally(() => setAuditLoading(false));
     }
   }, [activeTab, feedSourceFilter, feedKevOnly]);
 
@@ -145,6 +155,7 @@ export default function Settings() {
     { id: "feed", label: "Live Threat Feeds (NVD & KEV)", icon: Globe },
     { id: "ai", label: "AI Engine Configuration", icon: Cpu },
     { id: "profile", label: "Analyst Profile", icon: User },
+    { id: "audit", label: "Security & Audit Trail", icon: Lock },
     { id: "alerts", label: "Alerting & Policies", icon: Bell },
     { id: "system", label: "System Baseline & Recovery", icon: Server }
   ];
@@ -577,6 +588,85 @@ export default function Settings() {
                 <p className="text-xs font-mono text-emerald-400 flex items-center gap-1.5">
                   <CheckCircle2 className="w-3.5 h-3.5" /> Active Enterprise Session
                 </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Tab: Audit Logs */}
+      {activeTab === "audit" && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle><Lock className="w-4 h-4 text-cyan-400" /> Security Audit Trail & Access Logs</CardTitle>
+              <button
+                onClick={() => {
+                  setAuditLoading(true);
+                  fetch("/api/auth/audit-logs")
+                    .then(res => res.json())
+                    .then(data => setAuditLogsList(Array.isArray(data) ? data : []))
+                    .finally(() => setAuditLoading(false));
+                }}
+                className="px-2.5 py-1 text-[11px] font-mono text-cyan-400 hover:text-cyan-300 bg-cyan-950/60 border border-cyan-500/30 rounded-lg flex items-center gap-1.5"
+              >
+                <RefreshCw className={cn("w-3 h-3", auditLoading && "animate-spin")} />
+                <span>Refresh Log</span>
+              </button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Real-time audit log of all security lifecycle events including registrations, email verifications, logins, password resets, and intelligence ingestion operations.
+            </p>
+
+            <div className="rounded-xl border border-slate-800 bg-[#070B14] overflow-hidden">
+              <div className="max-h-96 overflow-y-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-900/90 text-[10px] font-mono uppercase text-slate-400 sticky top-0 border-b border-slate-800">
+                    <tr>
+                      <th className="p-2.5">Timestamp</th>
+                      <th className="p-2.5">Action</th>
+                      <th className="p-2.5">User / Target</th>
+                      <th className="p-2.5">Resource</th>
+                      <th className="p-2.5">IP Address</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60 font-mono text-[11px]">
+                    {auditLogsList.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="p-4 text-center text-slate-500">
+                          {auditLoading ? "Loading audit trail..." : "No audit entries found."}
+                        </td>
+                      </tr>
+                    ) : (
+                      auditLogsList.map((log) => (
+                        <tr key={log.id} className="hover:bg-slate-900/50">
+                          <td className="p-2.5 text-slate-400 whitespace-nowrap">
+                            {new Date(log.timestamp).toLocaleString()}
+                          </td>
+                          <td className="p-2.5">
+                            <span className={cn(
+                              "px-2 py-0.5 rounded text-[10px] font-bold",
+                              log.action.includes("FAIL") || log.action.includes("BLOCKED") || log.action.includes("EXPIRED")
+                                ? "bg-red-950 text-red-300 border border-red-800/60"
+                                : log.action.includes("SUCCESS") || log.action.includes("VERIFIED")
+                                ? "bg-emerald-950 text-emerald-300 border border-emerald-800/60"
+                                : "bg-cyan-950 text-cyan-300 border border-cyan-800/60"
+                            )}>
+                              {log.action}
+                            </span>
+                          </td>
+                          <td className="p-2.5 text-slate-200">{log.userEmail || "System"}</td>
+                          <td className="p-2.5 text-slate-400">
+                            {log.resourceType ? `${log.resourceType}: ${log.resourceId || "-"}` : "-"}
+                          </td>
+                          <td className="p-2.5 text-slate-500">{log.ipAddress || "local"}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           </CardContent>

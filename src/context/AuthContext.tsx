@@ -1,83 +1,253 @@
-/**
- * ShieldZen Academic Research Prototype - Authentication Context
- * Note: This provides lightweight client-side authentication and session state
- * management for academic and demonstration purposes.
- */
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { UserProfile } from "../types";
+
+export interface AuthResult {
+  success: boolean;
+  message?: string;
+  error?: string;
+  requiresVerification?: boolean;
+  email?: string;
+  user?: UserProfile;
+}
 
 interface AuthContextType {
   user: UserProfile | null;
   isAuthenticated: boolean;
-  login: (email: string, password?: string) => Promise<boolean>;
-  logout: () => void;
   loading: boolean;
+  login: (email: string, password: string) => Promise<AuthResult>;
+  register: (name: string, email: string, password: string, role?: string) => Promise<AuthResult>;
+  verifyEmail: (email: string, token: string) => Promise<AuthResult>;
+  resendVerification: (email: string) => Promise<AuthResult>;
+  forgotPassword: (email: string) => Promise<AuthResult>;
+  resetPassword: (email: string, token: string, newPassword: string) => Promise<AuthResult>;
+  logout: () => Promise<void>;
+  refreshProfile: () => Promise<void>;
 }
-
-const DEFAULT_USER: UserProfile = {
-  id: "usr-demo-alex",
-  name: "Alex Morgan",
-  email: "alex.morgan@shieldzen.sec",
-  role: "Senior Security Analyst",
-  clearance: "SOC Tier-2 / CTI Lead",
-  lastLogin: new Date().toISOString(),
-  avatarInitials: "AM"
-};
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<UserProfile | null>(() => {
-    const saved = localStorage.getItem("shieldzen_auth_user");
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        return DEFAULT_USER;
+  const [user, setUser] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+
+  // Restore authenticated session from server on startup
+  const refreshProfile = useCallback(async () => {
+    try {
+      const res = await fetch("/api/auth/me", {
+        headers: { "Accept": "application/json" }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.user) {
+          setUser(data.user);
+        } else {
+          setUser(null);
+        }
+      } else {
+        setUser(null);
       }
+    } catch (e) {
+      console.warn("[Auth] Session validation check failed:", e);
+      setUser(null);
+    } finally {
+      setLoading(false);
     }
-    // Default to authenticated demo analyst for smooth experience
-    return DEFAULT_USER;
-  });
-  const [loading, setLoading] = useState(false);
+  }, []);
 
   useEffect(() => {
-    if (user) {
-      localStorage.setItem("shieldzen_auth_user", JSON.stringify(user));
-    } else {
-      localStorage.removeItem("shieldzen_auth_user");
-    }
-  }, [user]);
+    refreshProfile();
+  }, [refreshProfile]);
 
-  const login = async (email: string, password?: string): Promise<boolean> => {
-    setLoading(true);
+  const login = async (email: string, password: string): Promise<AuthResult> => {
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ email: email.trim(), password })
       });
       const data = await res.json();
-      if (data.success && data.user) {
+
+      if (res.ok && data.success && data.user) {
         setUser(data.user);
-        return true;
-      } else {
-        // Fallback demo user
-        setUser(DEFAULT_USER);
-        return true;
+        return { success: true, user: data.user };
       }
-    } catch (e) {
-      setUser(DEFAULT_USER);
-      return true;
-    } finally {
-      setLoading(false);
+
+      // Explicitly check for unverified email status
+      if (res.status === 403 && data.requiresVerification) {
+        return {
+          success: false,
+          error: data.error || "Please verify your email address to proceed.",
+          requiresVerification: true,
+          email: data.email || email
+        };
+      }
+
+      return {
+        success: false,
+        error: data.error || "Invalid email or password."
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        error: "Unable to connect to authentication service. Please try again."
+      };
     }
   };
 
-  const logout = () => {
-    setUser(null);
-    localStorage.removeItem("shieldzen_auth_user");
-    fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+  const register = async (name: string, email: string, password: string, role?: string): Promise<AuthResult> => {
+    try {
+      const res = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), email: email.trim(), password, role })
+      });
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        return {
+          success: true,
+          message: data.message || "Registration successful! A verification email has been sent.",
+          requiresVerification: true,
+          email: data.email || email
+        };
+      }
+
+      return {
+        success: false,
+        error: data.error || "Registration failed. Please verify your details."
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        error: "Network error during registration. Please check your connection."
+      };
+    }
+  };
+
+  const verifyEmail = async (email: string, token: string): Promise<AuthResult> => {
+    try {
+      const res = await fetch("/api/auth/verify-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), token: token.trim() })
+      });
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        if (data.user) {
+          setUser(data.user);
+        }
+        return {
+          success: true,
+          message: data.message || "Email verified successfully!",
+          user: data.user
+        };
+      }
+
+      return {
+        success: false,
+        error: data.error || "Invalid or expired verification token."
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        error: "Failed to connect to verification service."
+      };
+    }
+  };
+
+  const resendVerification = async (email: string): Promise<AuthResult> => {
+    try {
+      const res = await fetch("/api/auth/resend-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim() })
+      });
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        return {
+          success: true,
+          message: data.message || "Verification link sent to your inbox."
+        };
+      }
+
+      return {
+        success: false,
+        error: data.error || "Failed to resend verification link."
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        error: "Failed to communicate with verification server."
+      };
+    }
+  };
+
+  const forgotPassword = async (email: string): Promise<AuthResult> => {
+    try {
+      const res = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim() })
+      });
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        return {
+          success: true,
+          message: data.message || "Password reset instructions dispatched."
+        };
+      }
+
+      return {
+        success: false,
+        error: data.error || "Failed to request password reset."
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        error: "Network error during password reset request."
+      };
+    }
+  };
+
+  const resetPassword = async (email: string, token: string, newPassword: string): Promise<AuthResult> => {
+    try {
+      const res = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), token: token.trim(), newPassword })
+      });
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        return {
+          success: true,
+          message: data.message || "Password updated successfully. You can now log in."
+        };
+      }
+
+      return {
+        success: false,
+        error: data.error || "Password reset failed. Invalid or expired token."
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        error: "Network error during password update."
+      };
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch (e) {
+      console.warn("[Auth] Logout API call error:", e);
+    } finally {
+      setUser(null);
+    }
   };
 
   return (
@@ -85,9 +255,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       value={{
         user,
         isAuthenticated: !!user,
+        loading,
         login,
+        register,
+        verifyEmail,
+        resendVerification,
+        forgotPassword,
+        resetPassword,
         logout,
-        loading
+        refreshProfile
       }}
     >
       {children}

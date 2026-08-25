@@ -405,6 +405,49 @@ async function createTables() {
       lastSyncedAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
     );
   `);
+
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      passwordHash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'analyst',
+      emailVerified INTEGER NOT NULL DEFAULT 0,
+      verificationTokenHash TEXT,
+      verificationTokenExpiresAt INTEGER,
+      resetPasswordTokenHash TEXT,
+      resetPasswordTokenExpiresAt INTEGER,
+      createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      updatedAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      lastLogin INTEGER
+    );
+  `);
+
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      userId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expiresAt INTEGER NOT NULL,
+      createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      ipAddress TEXT,
+      userAgent TEXT
+    );
+  `);
+
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id TEXT PRIMARY KEY,
+      userId TEXT,
+      userEmail TEXT,
+      action TEXT NOT NULL,
+      resourceType TEXT,
+      resourceId TEXT,
+      timestamp INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      ipAddress TEXT,
+      details TEXT
+    );
+  `);
 }
 
 export async function initDatabaseTables(): Promise<void> {

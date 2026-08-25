@@ -1,6 +1,8 @@
 import express from "express";
 import path from "path";
 import multer from "multer";
+import cookieParser from "cookie-parser";
+import bcrypt from "bcryptjs";
 import { createServer as createViteServer } from "vite";
 import { db, initDatabaseTables, resetDatabase } from "./src/db";
 import {
@@ -22,8 +24,11 @@ import {
   campaignIocs,
   campaignIncidents,
   campaignMitreTechniques,
+  users,
+  sessions,
+  auditLogs,
 } from "./src/db/schema";
-import { eq, desc, asc, sql, count, like, and } from "drizzle-orm";
+import { eq, desc, asc, sql, count, like, and, gt } from "drizzle-orm";
 import { analyzeIntelligenceReport } from "./server/ai";
 import { generateSyntheticCTIDatabase } from "./server/seedData";
 import { fetchNvdCve, getAllRecentNvdVulnerabilities } from "./server/nvdService";
@@ -57,6 +62,26 @@ import {
   syncCisaKevIntelligence,
   startBackgroundSyncScheduler
 } from "./server/intelligenceSyncService";
+import {
+  sendVerificationEmail,
+  sendPasswordResetEmail,
+  getRecentTestEmails
+} from "./server/emailService";
+import {
+  seedInitialAdmin,
+  formatSafeUser,
+  hashToken,
+  generateSecureToken,
+  generateSessionId,
+  logAuditEvent,
+  getUserFromSession,
+  extractSessionToken,
+  authenticate,
+  optionalAuthenticate,
+  requireRole,
+  requireAdmin,
+  AuthenticatedRequest
+} from "./server/authService";
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -271,9 +296,11 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json({ limit: "25mb" }));
+  app.use(cookieParser());
 
   // Seed on startup
   await seedDatabaseIfEmpty();
+  await seedInitialAdmin();
 
   // System Configuration & Engine Status
   app.get("/api/config", (req, res) => {
@@ -289,10 +316,18 @@ async function startServer() {
     });
   });
 
-  // Reset database endpoint
-  app.post("/api/reset-data", async (req, res) => {
+  // Reset database endpoint (Administrative authorization required)
+  app.post("/api/reset-data", authenticate, requireAdmin, async (req: AuthenticatedRequest, res) => {
     try {
       await populateSyntheticData(true);
+      await logAuditEvent({
+        userId: req.user?.id || null,
+        userEmail: req.user?.email || "admin",
+        action: "DATABASE_RESET_EXECUTED",
+        resourceType: "DATABASE",
+        ipAddress: req.ip || req.socket.remoteAddress,
+        details: { message: "Database reset to baseline state by administrator." }
+      });
       res.json({ success: true, message: "Database reset to pristine synthetic CTI baseline." });
     } catch (e: any) {
       res.status(500).json({ error: "Failed to reset dataset: " + e.message });
@@ -756,6 +791,23 @@ async function startServer() {
         }).where(eq(reports.id, reportId));
 
         await insertAnalysisArtifacts(reportId, analysis);
+
+        const token = extractSessionToken(req);
+        const currentUser = token ? await getUserFromSession(token) : null;
+        await logAuditEvent({
+          userId: currentUser?.id || null,
+          userEmail: currentUser?.email || "analyst@shieldzen.sec",
+          action: "REPORT_UPLOADED_AND_ANALYZED",
+          resourceType: "REPORT",
+          resourceId: reportId,
+          ipAddress: req.ip || req.socket.remoteAddress,
+          details: {
+            filename,
+            severity: analysis.severity,
+            threatCount: analysis.threats.length,
+            iocCount: analysis.iocs.length
+          }
+        });
 
         res.json({
           id: reportId,
@@ -2167,50 +2219,558 @@ async function startServer() {
   });
 
   // ==========================================
-  // Authentication Prototype Endpoints
-  // Note: Prototype authentication for academic demonstration.
+  // ShieldZen Enterprise Authentication & Identity Engine
   // ==========================================
-  app.post("/api/auth/login", (req, res) => {
-    const { email, password } = req.body;
-    // Safe academic prototype credentials with demo fallback
-    if (!email) {
-      return res.status(400).json({ error: "Email is required" });
-    }
 
-    const isDemo = email.toLowerCase().includes("demo") || password === "demo" || !password;
-    const user = {
-      id: "usr-" + Math.random().toString(36).substring(2, 7),
-      name: isDemo ? "Alex Morgan" : (email.split("@")[0] || "Security Analyst").replace(".", " "),
-      email: email || "alex.morgan@shieldzen.sec",
-      role: "Senior Security Analyst",
-      clearance: "SOC Tier-2 / CTI Lead",
-      lastLogin: new Date().toISOString(),
-      avatarInitials: isDemo ? "AM" : email.substring(0, 2).toUpperCase()
-    };
+  // Register New Analyst Account
+  app.post("/api/auth/register", async (req, res) => {
+    try {
+      const { name, email, password, role } = req.body;
+      const clientIp = req.ip || req.socket.remoteAddress;
 
-    res.json({
-      success: true,
-      user,
-      token: "szen_token_" + Buffer.from(email + ":" + Date.now()).toString("base64")
-    });
-  });
-
-  app.get("/api/auth/me", (req, res) => {
-    res.json({
-      user: {
-        id: "usr-default",
-        name: "Alex Morgan",
-        email: "alex.morgan@shieldzen.sec",
-        role: "Senior Security Analyst",
-        clearance: "SOC Tier-2 / CTI Lead",
-        lastLogin: new Date().toISOString(),
-        avatarInitials: "AM"
+      if (!name || typeof name !== "string" || !name.trim()) {
+        return res.status(400).json({ error: "Analyst name is required." });
       }
-    });
+
+      if (!email || typeof email !== "string" || !email.includes("@")) {
+        return res.status(400).json({ error: "A valid corporate/analyst email address is required." });
+      }
+
+      if (!password || typeof password !== "string" || password.length < 8) {
+        return res.status(400).json({ error: "Password must be at least 8 characters in length." });
+      }
+
+      const normalizedEmail = email.toLowerCase().trim();
+
+      // Check existing user
+      const existingUser = await db.query.users.findFirst({
+        where: eq(users.email, normalizedEmail)
+      });
+
+      if (existingUser) {
+        await logAuditEvent({
+          userEmail: normalizedEmail,
+          action: "REGISTRATION_FAILED_DUPLICATE",
+          ipAddress: clientIp,
+          details: { message: "Attempted to register already existing email." }
+        });
+        return res.status(409).json({ error: "An account with this email address already exists." });
+      }
+
+      const passwordHash = await bcrypt.hash(password, 10);
+      const rawVerificationToken = generateSecureToken();
+      const verificationTokenHash = hashToken(rawVerificationToken);
+      const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+      // Enforce default analyst role for public registration (prevents unauthorized privilege escalation)
+      const assignedRole = "analyst";
+
+      const userId = "usr-" + Math.random().toString(36).substring(2, 9);
+
+      await db.insert(users).values({
+        id: userId,
+        name: name.trim(),
+        email: normalizedEmail,
+        passwordHash,
+        role: assignedRole,
+        emailVerified: 0,
+        verificationTokenHash,
+        verificationTokenExpiresAt: verificationExpires,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+
+      const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get("host")}` || "http://localhost:3000";
+      try {
+        await sendVerificationEmail(normalizedEmail, name.trim(), rawVerificationToken, baseUrl);
+      } catch (mailErr: any) {
+        console.warn("[Auth] Verification email dispatch warning:", mailErr?.message);
+      }
+
+      await logAuditEvent({
+        userId,
+        userEmail: normalizedEmail,
+        action: "USER_REGISTERED",
+        resourceType: "USER",
+        resourceId: userId,
+        ipAddress: clientIp,
+        details: { role: assignedRole, verificationSent: true }
+      });
+
+      res.status(201).json({
+        success: true,
+        message: "Account created successfully. A verification link has been sent to your email.",
+        email: normalizedEmail,
+        requiresVerification: true
+      });
+    } catch (err: any) {
+      console.error("[Auth] Register error:", err);
+      res.status(500).json({ error: "Registration failed: " + (err?.message || "Server error") });
+    }
   });
 
-  app.post("/api/auth/logout", (req, res) => {
-    res.json({ success: true, message: "Logged out successfully" });
+  // Verify Email Address
+  app.post("/api/auth/verify-email", async (req, res) => {
+    try {
+      const { email, token } = req.body;
+      const clientIp = req.ip || req.socket.remoteAddress;
+
+      if (!email || !token) {
+        return res.status(400).json({ error: "Email and verification token are required." });
+      }
+
+      const normalizedEmail = email.toLowerCase().trim();
+      const tokenHash = hashToken(token.trim());
+
+      const user = await db.query.users.findFirst({
+        where: eq(users.email, normalizedEmail)
+      });
+
+      if (!user) {
+        return res.status(404).json({ error: "User account not found." });
+      }
+
+      if (user.emailVerified === 1) {
+        return res.json({
+          success: true,
+          message: "Email is already verified. You can log in.",
+          user: formatSafeUser(user)
+        });
+      }
+
+      if (user.verificationTokenHash !== tokenHash) {
+        await logAuditEvent({
+          userId: user.id,
+          userEmail: normalizedEmail,
+          action: "EMAIL_VERIFY_INVALID_TOKEN",
+          ipAddress: clientIp,
+          details: { message: "Invalid verification token entered." }
+        });
+        return res.status(400).json({ error: "Invalid verification token. Please request a new verification link." });
+      }
+
+      if (user.verificationTokenExpiresAt && new Date(user.verificationTokenExpiresAt) < new Date()) {
+        await logAuditEvent({
+          userId: user.id,
+          userEmail: normalizedEmail,
+          action: "EMAIL_VERIFY_TOKEN_EXPIRED",
+          ipAddress: clientIp,
+          details: { message: "Verification token expired." }
+        });
+        return res.status(400).json({ error: "Verification token has expired. Please request a new link." });
+      }
+
+      // Mark email as verified
+      await db.update(users).set({
+        emailVerified: 1,
+        verificationTokenHash: null,
+        verificationTokenExpiresAt: null,
+        lastLogin: new Date(),
+        updatedAt: new Date()
+      }).where(eq(users.id, user.id));
+
+      // Create session
+      const sessionId = generateSessionId();
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+
+      await db.insert(sessions).values({
+        id: sessionId,
+        userId: user.id,
+        expiresAt,
+        createdAt: new Date(),
+        ipAddress: clientIp,
+        userAgent: req.get("user-agent") || null
+      });
+
+      res.cookie("szen_session", sessionId, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+        path: "/"
+      });
+
+      await logAuditEvent({
+        userId: user.id,
+        userEmail: normalizedEmail,
+        action: "EMAIL_VERIFIED_AND_LOGGED_IN",
+        resourceType: "USER",
+        resourceId: user.id,
+        ipAddress: clientIp
+      });
+
+      const updatedUser = await db.query.users.findFirst({ where: eq(users.id, user.id) });
+
+      res.json({
+        success: true,
+        message: "Email verified successfully! Welcome to ShieldZen.",
+        user: formatSafeUser(updatedUser),
+        token: sessionId
+      });
+    } catch (err: any) {
+      console.error("[Auth] Verify email error:", err);
+      res.status(500).json({ error: "Email verification failed: " + err?.message });
+    }
+  });
+
+  // Resend Email Verification Token
+  app.post("/api/auth/resend-verification", async (req, res) => {
+    try {
+      const { email } = req.body;
+      const clientIp = req.ip || req.socket.remoteAddress;
+
+      if (!email) {
+        return res.status(400).json({ error: "Email is required." });
+      }
+
+      const normalizedEmail = email.toLowerCase().trim();
+      const user = await db.query.users.findFirst({
+        where: eq(users.email, normalizedEmail)
+      });
+
+      if (!user) {
+        // Return success message to avoid user enumeration
+        return res.json({ success: true, message: "If your account exists and is unverified, a new verification link has been dispatched." });
+      }
+
+      if (user.emailVerified === 1) {
+        return res.status(400).json({ error: "Account is already verified. You can log in directly." });
+      }
+
+      const rawToken = generateSecureToken();
+      const verificationTokenHash = hashToken(rawToken);
+      const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+      await db.update(users).set({
+        verificationTokenHash,
+        verificationTokenExpiresAt: verificationExpires,
+        updatedAt: new Date()
+      }).where(eq(users.id, user.id));
+
+      const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get("host")}` || "http://localhost:3000";
+      try {
+        await sendVerificationEmail(normalizedEmail, user.name, rawToken, baseUrl);
+      } catch (mailErr: any) {
+        console.warn("[Auth] Resend verification email warning:", mailErr?.message);
+      }
+
+      await logAuditEvent({
+        userId: user.id,
+        userEmail: normalizedEmail,
+        action: "VERIFICATION_RESENT",
+        resourceType: "USER",
+        resourceId: user.id,
+        ipAddress: clientIp
+      });
+
+      res.json({
+        success: true,
+        message: "A fresh verification link has been sent to your email."
+      });
+    } catch (err: any) {
+      console.error("[Auth] Resend verification error:", err);
+      res.status(500).json({ error: "Failed to resend verification: " + err?.message });
+    }
+  });
+
+  // User Login
+  app.post("/api/auth/login", async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      const clientIp = req.ip || req.socket.remoteAddress;
+
+      if (!email || !password) {
+        return res.status(400).json({ error: "Both email and password are required." });
+      }
+
+      const normalizedEmail = email.toLowerCase().trim();
+
+      const user = await db.query.users.findFirst({
+        where: eq(users.email, normalizedEmail)
+      });
+
+      if (!user) {
+        await logAuditEvent({
+          userEmail: normalizedEmail,
+          action: "LOGIN_FAILED_NO_SUCH_USER",
+          ipAddress: clientIp
+        });
+        return res.status(401).json({ error: "Invalid email or password." });
+      }
+
+      const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
+
+      if (!isPasswordValid) {
+        await logAuditEvent({
+          userId: user.id,
+          userEmail: normalizedEmail,
+          action: "LOGIN_FAILED_BAD_PASSWORD",
+          ipAddress: clientIp
+        });
+        return res.status(401).json({ error: "Invalid email or password." });
+      }
+
+      if (user.emailVerified !== 1) {
+        await logAuditEvent({
+          userId: user.id,
+          userEmail: normalizedEmail,
+          action: "LOGIN_BLOCKED_UNVERIFIED_EMAIL",
+          ipAddress: clientIp
+        });
+        return res.status(403).json({
+          error: "Your email address has not been verified yet. Please check your inbox or resend verification.",
+          requiresVerification: true,
+          email: user.email
+        });
+      }
+
+      // Record successful login
+      await db.update(users).set({
+        lastLogin: new Date(),
+        updatedAt: new Date()
+      }).where(eq(users.id, user.id));
+
+      const sessionId = generateSessionId();
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+
+      await db.insert(sessions).values({
+        id: sessionId,
+        userId: user.id,
+        expiresAt,
+        createdAt: new Date(),
+        ipAddress: clientIp,
+        userAgent: req.get("user-agent") || null
+      });
+
+      res.cookie("szen_session", sessionId, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+        path: "/"
+      });
+
+      await logAuditEvent({
+        userId: user.id,
+        userEmail: normalizedEmail,
+        action: "LOGIN_SUCCESS",
+        resourceType: "USER",
+        resourceId: user.id,
+        ipAddress: clientIp
+      });
+
+      const safeUser = formatSafeUser(user);
+
+      res.json({
+        success: true,
+        user: safeUser,
+        token: sessionId
+      });
+    } catch (err: any) {
+      console.error("[Auth] Login error:", err);
+      res.status(500).json({ error: "Login authentication failed: " + err?.message });
+    }
+  });
+
+  // Get Current Authenticated User Profile
+  app.get("/api/auth/me", async (req, res) => {
+    try {
+      const token = extractSessionToken(req);
+      if (!token) {
+        return res.status(401).json({ error: "Unauthenticated", user: null });
+      }
+
+      const user = await getUserFromSession(token);
+      if (!user) {
+        return res.status(401).json({ error: "Session expired or invalid", user: null });
+      }
+
+      res.json({ user });
+    } catch (err: any) {
+      console.error("[Auth] /me error:", err);
+      res.status(500).json({ error: "Failed to fetch profile", user: null });
+    }
+  });
+
+  // Logout Current Session
+  app.post("/api/auth/logout", async (req, res) => {
+    try {
+      const token = extractSessionToken(req);
+      const clientIp = req.ip || req.socket.remoteAddress;
+
+      if (token) {
+        const user = await getUserFromSession(token);
+        await db.delete(sessions).where(eq(sessions.id, token));
+
+        if (user) {
+          await logAuditEvent({
+            userId: user.id,
+            userEmail: user.email,
+            action: "USER_LOGOUT",
+            resourceType: "SESSION",
+            resourceId: token,
+            ipAddress: clientIp
+          });
+        }
+      }
+
+      res.clearCookie("szen_session", { path: "/" });
+      res.json({ success: true, message: "Logged out successfully." });
+    } catch (err: any) {
+      console.error("[Auth] Logout error:", err);
+      res.status(500).json({ error: "Logout failed: " + err?.message });
+    }
+  });
+
+  // Request Password Reset
+  app.post("/api/auth/forgot-password", async (req, res) => {
+    try {
+      const { email } = req.body;
+      const clientIp = req.ip || req.socket.remoteAddress;
+
+      if (!email) {
+        return res.status(400).json({ error: "Email address is required." });
+      }
+
+      const normalizedEmail = email.toLowerCase().trim();
+      const user = await db.query.users.findFirst({
+        where: eq(users.email, normalizedEmail)
+      });
+
+      if (user) {
+        const rawToken = generateSecureToken();
+        const resetPasswordTokenHash = hashToken(rawToken);
+        const resetPasswordTokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+        await db.update(users).set({
+          resetPasswordTokenHash,
+          resetPasswordTokenExpiresAt,
+          updatedAt: new Date()
+        }).where(eq(users.id, user.id));
+
+        const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get("host")}` || "http://localhost:3000";
+        try {
+          await sendPasswordResetEmail(normalizedEmail, user.name, rawToken, baseUrl);
+        } catch (mailErr: any) {
+          console.warn("[Auth] Password reset email warning:", mailErr?.message);
+        }
+
+        await logAuditEvent({
+          userId: user.id,
+          userEmail: normalizedEmail,
+          action: "PASSWORD_RESET_REQUESTED",
+          resourceType: "USER",
+          resourceId: user.id,
+          ipAddress: clientIp
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "If your email address is registered, instructions to reset your password have been sent."
+      });
+    } catch (err: any) {
+      console.error("[Auth] Forgot password error:", err);
+      res.status(500).json({ error: "Failed to process password reset request." });
+    }
+  });
+
+  // Complete Password Reset
+  app.post("/api/auth/reset-password", async (req, res) => {
+    try {
+      const { email, token, newPassword } = req.body;
+      const clientIp = req.ip || req.socket.remoteAddress;
+
+      if (!email || !token || !newPassword) {
+        return res.status(400).json({ error: "Email, security token, and new password are required." });
+      }
+
+      if (newPassword.length < 8) {
+        return res.status(400).json({ error: "Password must be at least 8 characters long." });
+      }
+
+      const normalizedEmail = email.toLowerCase().trim();
+      const tokenHash = hashToken(token.trim());
+
+      const user = await db.query.users.findFirst({
+        where: eq(users.email, normalizedEmail)
+      });
+
+      if (!user) {
+        return res.status(400).json({ error: "Invalid password reset request." });
+      }
+
+      if (!user.resetPasswordTokenHash || user.resetPasswordTokenHash !== tokenHash) {
+        await logAuditEvent({
+          userId: user.id,
+          userEmail: normalizedEmail,
+          action: "PASSWORD_RESET_INVALID_TOKEN",
+          ipAddress: clientIp
+        });
+        return res.status(400).json({ error: "Invalid or expired password reset token." });
+      }
+
+      if (user.resetPasswordTokenExpiresAt && new Date(user.resetPasswordTokenExpiresAt) < new Date()) {
+        await logAuditEvent({
+          userId: user.id,
+          userEmail: normalizedEmail,
+          action: "PASSWORD_RESET_EXPIRED_TOKEN",
+          ipAddress: clientIp
+        });
+        return res.status(400).json({ error: "Password reset token has expired. Please request a new one." });
+      }
+
+      const newPasswordHash = await bcrypt.hash(newPassword, 10);
+
+      // Update password and clear reset tokens
+      await db.update(users).set({
+        passwordHash: newPasswordHash,
+        resetPasswordTokenHash: null,
+        resetPasswordTokenExpiresAt: null,
+        updatedAt: new Date()
+      }).where(eq(users.id, user.id));
+
+      // Invalidate all active sessions for security
+      await db.delete(sessions).where(eq(sessions.userId, user.id));
+
+      await logAuditEvent({
+        userId: user.id,
+        userEmail: normalizedEmail,
+        action: "PASSWORD_RESET_SUCCESS",
+        resourceType: "USER",
+        resourceId: user.id,
+        ipAddress: clientIp,
+        details: { message: "Password updated successfully; sessions revoked." }
+      });
+
+      res.json({
+        success: true,
+        message: "Your password has been successfully reset. You may now log in with your new credentials."
+      });
+    } catch (err: any) {
+      console.error("[Auth] Reset password error:", err);
+      res.status(500).json({ error: "Failed to reset password: " + err?.message });
+    }
+  });
+
+  // Audit Logs Telemetry (Restricted to Security Administrators and Senior Analysts)
+  app.get("/api/auth/audit-logs", authenticate, requireRole("admin", "senior_analyst"), async (req: AuthenticatedRequest, res) => {
+    try {
+      const logs = await db.query.auditLogs.findMany({
+        orderBy: [desc(auditLogs.timestamp)],
+        limit: 100
+      });
+      res.json(logs);
+    } catch (err: any) {
+      console.error("[Auth] Error fetching audit logs:", err);
+      res.status(500).json({ error: "Failed to fetch audit logs" });
+    }
+  });
+
+  // Recent Test Emails (Facilitates developer verification and testing)
+  app.get("/api/auth/test-emails", (req, res) => {
+    const emails = getRecentTestEmails();
+    res.json(emails);
   });
 
   // Vite Middleware
