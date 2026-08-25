@@ -300,6 +300,15 @@ async function populateSyntheticData(forceClear = false) {
 async function startServer() {
   const app = express();
   const PORT = 3000;
+  const isProduction = process.env.NODE_ENV === "production";
+
+  const sessionCookieOptions: express.CookieOptions = {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? "none" : "lax",
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+    path: "/"
+  };
 
   app.use(express.json({ limit: "25mb" }));
   app.use(cookieParser());
@@ -2388,13 +2397,7 @@ async function startServer() {
         userAgent: req.get("user-agent") || null
       });
 
-      res.cookie("szen_session", sessionId, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "none",
-        maxAge: 30 * 24 * 60 * 60 * 1000,
-        path: "/"
-      });
+      res.cookie("szen_session", sessionId, sessionCookieOptions);
 
       await logAuditEvent({
         userId: user.id,
@@ -2731,13 +2734,7 @@ async function startServer() {
         userAgent: req.get("user-agent") || null
       });
 
-      res.cookie("szen_session", sessionId, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "none",
-        maxAge: 30 * 24 * 60 * 60 * 1000,
-        path: "/"
-      });
+      res.cookie("szen_session", sessionId, sessionCookieOptions);
 
       await logAuditEvent({
         userId: user.id,
@@ -2909,7 +2906,11 @@ async function startServer() {
         }
       }
 
-      res.clearCookie("szen_session", { path: "/", secure: true, sameSite: "none" });
+      res.clearCookie("szen_session", {
+        path: "/",
+        secure: isProduction,
+        sameSite: isProduction ? "none" : "lax"
+      });
       res.json({ success: true, message: "Logged out successfully." });
     } catch (err: any) {
       console.error("[Auth] Logout error:", err);
