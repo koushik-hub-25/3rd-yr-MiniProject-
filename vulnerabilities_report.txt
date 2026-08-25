@@ -1,0 +1,203 @@
+
+=== A. LIVE NVD records (10 records) ===
+CVE: CVE-1999-0095 | Source: NVD | Status: LIVE | KEV: 0 | Score: 100 (CRITICAL)
+  Pub: 1988-10-01T04:00:00.000 | Mod: 2026-06-16T21:47:34.460 | KEV Add: null | KEV Due: null | RW: Unknown | Sync: 1787638982
+CVE: CVE-1999-0082 | Source: NVD | Status: LIVE | KEV: 0 | Score: 100 (CRITICAL)
+  Pub: 1988-11-11T05:00:00.000 | Mod: 2026-06-16T21:47:32.300 | KEV Add: null | KEV Due: null | RW: Unknown | Sync: 1787638982
+CVE: CVE-1999-1471 | Source: NVD | Status: LIVE | KEV: 0 | Score: 72 (HIGH)
+  Pub: 1989-01-01T05:00:00.000 | Mod: 2026-06-16T21:50:30.747 | KEV Add: null | KEV Due: null | RW: Unknown | Sync: 1787638982
+CVE: CVE-1999-1122 | Source: NVD | Status: LIVE | KEV: 0 | Score: 46 (MEDIUM)
+  Pub: 1989-07-26T04:00:00.000 | Mod: 2026-06-16T21:49:46.027 | KEV Add: null | KEV Due: null | RW: Unknown | Sync: 1787638982
+CVE: CVE-1999-1467 | Source: NVD | Status: LIVE | KEV: 0 | Score: 100 (CRITICAL)
+  Pub: 1989-10-26T04:00:00.000 | Mod: 2026-06-16T21:50:30.147 | KEV Add: null | KEV Due: null | RW: Unknown | Sync: 1787638982
+CVE: CVE-1999-1506 | Source: NVD | Status: LIVE | KEV: 0 | Score: 75 (HIGH)
+  Pub: 1990-01-29T05:00:00.000 | Mod: 2026-06-16T21:50:35.230 | KEV Add: null | KEV Due: null | RW: Unknown | Sync: 1787638982
+CVE: CVE-1999-0084 | Source: NVD | Status: LIVE | KEV: 0 | Score: 84 (HIGH)
+  Pub: 1990-05-01T04:00:00.000 | Mod: 2026-06-16T21:47:32.553 | KEV Add: null | KEV Due: null | RW: Unknown | Sync: 1787638982
+CVE: CVE-2000-0388 | Source: NVD | Status: LIVE | KEV: 0 | Score: 75 (HIGH)
+  Pub: 1990-05-09T04:00:00.000 | Mod: 2026-06-16T21:51:36.727 | KEV Add: null | KEV Due: null | RW: Unknown | Sync: 1787638982
+CVE: CVE-1999-0209 | Source: NVD | Status: LIVE | KEV: 0 | Score: 50 (MEDIUM)
+  Pub: 1990-08-14T04:00:00.000 | Mod: 2026-06-16T21:47:54.977 | KEV Add: null | KEV Due: null | RW: Unknown | Sync: 1787638982
+CVE: CVE-1999-1198 | Source: NVD | Status: LIVE | KEV: 0 | Score: 72 (HIGH)
+  Pub: 1990-10-03T04:00:00.000 | Mod: 2026-06-16T21:49:55.630 | KEV Add: null | KEV Due: null | RW: Unknown | Sync: 1787638982
+
+=== B. LIVE CISA KEV records (30 records) ===
+CVE: CVE-2026-21962 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-24 | KEV Due: 2026-08-27 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-73570 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-21 | KEV Due: 2026-08-24 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-72530 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-20 | KEV Due: 2026-09-03 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-72529 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-20 | KEV Due: 2026-08-23 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-64849 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-19 | KEV Due: 2026-09-02 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-33824 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-18 | KEV Due: 2026-08-21 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-59310 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-18 | KEV Due: 2026-08-21 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-55040 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-18 | KEV Due: 2026-08-21 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-65400 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-18 | KEV Due: 2026-08-21 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2025-62593 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-17 | KEV Due: 2026-08-20 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-20349 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-11 | KEV Due: 2026-08-14 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-68820 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-11 | KEV Due: 2026-08-25 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-72898 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-11 | KEV Due: 2026-08-14 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-8037 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-07 | KEV Due: 2026-08-10 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-63077 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-05 | KEV Due: 2026-08-08 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-18556 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-04 | KEV Due: 2026-08-07 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-34486 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-04 | KEV Due: 2026-08-07 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-9198 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-04 | KEV Due: 2026-08-07 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-18577 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-03 | KEV Due: 2026-08-06 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-20316 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-29 | KEV Due: 2026-08-01 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2025-68686 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-27 | KEV Due: 2026-08-10 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-16812 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-27 | KEV Due: 2026-07-30 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-16232 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-22 | KEV Due: 2026-07-25 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-50522 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-22 | KEV Due: 2026-07-25 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-60137 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-21 | KEV Due: 2026-08-04 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-63030 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-21 | KEV Due: 2026-07-24 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-0770 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-21 | KEV Due: 2026-07-24 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2021-27137 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-21 | KEV Due: 2026-07-24 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-58644 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-16 | KEV Due: 2026-07-19 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-25089 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-16 | KEV Due: 2026-07-19 | RW: Unknown | Sync: 1787638980
+
+=== C. CACHED/PRELOADED records (12 records) ===
+CVE: CVE-2024-38077 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 98 (CRITICAL)
+  Pub: 2024-07-09T17:15:23 | Mod: 2024-08-01T14:22:10 | KEV Add: 2024-07-16 | KEV Due: 2024-08-06 | RW: Known | Sync: 1787629456
+CVE: CVE-2024-3094 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 100 (CRITICAL)
+  Pub: 2024-03-29T18:15:08 | Mod: 2024-04-12T19:33:01 | KEV Add: 2024-04-02 | KEV Due: 2024-04-18 | RW: Unknown | Sync: 1787629456
+CVE: CVE-2023-34362 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 98 (CRITICAL)
+  Pub: 2023-06-02T14:15:09 | Mod: 2023-11-08T18:22:15 | KEV Add: 2023-06-02 | KEV Due: 2023-06-23 | RW: Known | Sync: 1787629456
+CVE: CVE-2024-21887 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 91 (CRITICAL)
+  Pub: 2024-01-12T13:15:10 | Mod: 2024-02-15T16:40:02 | KEV Add: 2024-01-12 | KEV Due: 2024-01-22 | RW: Known | Sync: 1787629456
+CVE: CVE-2024-1709 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 100 (CRITICAL)
+  Pub: 2024-02-21T18:15:48 | Mod: 2024-03-01T20:12:33 | KEV Add: 2024-02-22 | KEV Due: 2024-02-29 | RW: Known | Sync: 1787629456
+CVE: CVE-2023-4966 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 94 (CRITICAL)
+  Pub: 2023-10-10T19:15:10 | Mod: 2023-12-05T15:20:00 | KEV Add: 2023-10-18 | KEV Due: 2023-11-08 | RW: Known | Sync: 1787629456
+CVE: CVE-2021-44228 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 100 (CRITICAL)
+  Pub: 2021-12-10T10:15:08 | Mod: 2023-04-17T16:15:00 | KEV Add: 2021-12-10 | KEV Due: 2021-12-24 | RW: Known | Sync: 1787629456
+CVE: CVE-2024-3400 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 100 (CRITICAL)
+  Pub: 2024-04-12T14:15:10 | Mod: 2024-05-01T18:30:00 | KEV Add: 2024-04-12 | KEV Due: 2024-04-19 | RW: Known | Sync: 1787629456
+CVE: CVE-2024-6387 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 81 (HIGH)
+  Pub: 2024-07-01T08:15:00 | Mod: 2024-07-15T12:00:00 | KEV Add: 2024-07-02 | KEV Due: 2024-07-23 | RW: Unknown | Sync: 1787629456
+CVE: CVE-2023-38606 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 78 (HIGH)
+  Pub: 2023-07-24T18:15:00 | Mod: 2023-09-01T15:10:00 | KEV Add: 2023-07-26 | KEV Due: 2023-08-16 | RW: Known | Sync: 1787629456
+CVE: CVE-2024-21762 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 98 (CRITICAL)
+  Pub: 2024-02-09T15:15:08 | Mod: 2024-03-01T10:00:00 | KEV Add: 2024-02-09 | KEV Due: 2024-02-16 | RW: Known | Sync: 1787629456
+CVE: CVE-2023-23397 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 98 (CRITICAL)
+  Pub: 2023-03-14T17:15:00 | Mod: 2023-04-20T19:00:00 | KEV Add: 2023-03-14 | KEV Due: 2023-03-28 | RW: Known | Sync: 1787629456
+
+=== D. Both NVD and CISA KEV info (42 records) ===
+CVE: CVE-2024-38077 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 98 (CRITICAL)
+  Pub: 2024-07-09T17:15:23 | Mod: 2024-08-01T14:22:10 | KEV Add: 2024-07-16 | KEV Due: 2024-08-06 | RW: Known | Sync: 1787629456
+CVE: CVE-2024-3094 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 100 (CRITICAL)
+  Pub: 2024-03-29T18:15:08 | Mod: 2024-04-12T19:33:01 | KEV Add: 2024-04-02 | KEV Due: 2024-04-18 | RW: Unknown | Sync: 1787629456
+CVE: CVE-2023-34362 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 98 (CRITICAL)
+  Pub: 2023-06-02T14:15:09 | Mod: 2023-11-08T18:22:15 | KEV Add: 2023-06-02 | KEV Due: 2023-06-23 | RW: Known | Sync: 1787629456
+CVE: CVE-2024-21887 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 91 (CRITICAL)
+  Pub: 2024-01-12T13:15:10 | Mod: 2024-02-15T16:40:02 | KEV Add: 2024-01-12 | KEV Due: 2024-01-22 | RW: Known | Sync: 1787629456
+CVE: CVE-2024-1709 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 100 (CRITICAL)
+  Pub: 2024-02-21T18:15:48 | Mod: 2024-03-01T20:12:33 | KEV Add: 2024-02-22 | KEV Due: 2024-02-29 | RW: Known | Sync: 1787629456
+CVE: CVE-2023-4966 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 94 (CRITICAL)
+  Pub: 2023-10-10T19:15:10 | Mod: 2023-12-05T15:20:00 | KEV Add: 2023-10-18 | KEV Due: 2023-11-08 | RW: Known | Sync: 1787629456
+CVE: CVE-2021-44228 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 100 (CRITICAL)
+  Pub: 2021-12-10T10:15:08 | Mod: 2023-04-17T16:15:00 | KEV Add: 2021-12-10 | KEV Due: 2021-12-24 | RW: Known | Sync: 1787629456
+CVE: CVE-2024-3400 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 100 (CRITICAL)
+  Pub: 2024-04-12T14:15:10 | Mod: 2024-05-01T18:30:00 | KEV Add: 2024-04-12 | KEV Due: 2024-04-19 | RW: Known | Sync: 1787629456
+CVE: CVE-2024-6387 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 81 (HIGH)
+  Pub: 2024-07-01T08:15:00 | Mod: 2024-07-15T12:00:00 | KEV Add: 2024-07-02 | KEV Due: 2024-07-23 | RW: Unknown | Sync: 1787629456
+CVE: CVE-2023-38606 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 78 (HIGH)
+  Pub: 2023-07-24T18:15:00 | Mod: 2023-09-01T15:10:00 | KEV Add: 2023-07-26 | KEV Due: 2023-08-16 | RW: Known | Sync: 1787629456
+CVE: CVE-2024-21762 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 98 (CRITICAL)
+  Pub: 2024-02-09T15:15:08 | Mod: 2024-03-01T10:00:00 | KEV Add: 2024-02-09 | KEV Due: 2024-02-16 | RW: Known | Sync: 1787629456
+CVE: CVE-2023-23397 | Source: HYBRID | Status: CACHED | KEV: 1 | Score: 98 (CRITICAL)
+  Pub: 2023-03-14T17:15:00 | Mod: 2023-04-20T19:00:00 | KEV Add: 2023-03-14 | KEV Due: 2023-03-28 | RW: Known | Sync: 1787629456
+CVE: CVE-2026-21962 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-24 | KEV Due: 2026-08-27 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-73570 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-21 | KEV Due: 2026-08-24 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-72530 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-20 | KEV Due: 2026-09-03 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-72529 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-20 | KEV Due: 2026-08-23 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-64849 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-19 | KEV Due: 2026-09-02 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-33824 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-18 | KEV Due: 2026-08-21 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-59310 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-18 | KEV Due: 2026-08-21 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-55040 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-18 | KEV Due: 2026-08-21 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-65400 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-18 | KEV Due: 2026-08-21 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2025-62593 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-17 | KEV Due: 2026-08-20 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-20349 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-11 | KEV Due: 2026-08-14 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-68820 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-11 | KEV Due: 2026-08-25 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-72898 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-11 | KEV Due: 2026-08-14 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-8037 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-07 | KEV Due: 2026-08-10 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-63077 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-05 | KEV Due: 2026-08-08 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-18556 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-04 | KEV Due: 2026-08-07 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-34486 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-04 | KEV Due: 2026-08-07 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-9198 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-04 | KEV Due: 2026-08-07 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-18577 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-08-03 | KEV Due: 2026-08-06 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-20316 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-29 | KEV Due: 2026-08-01 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2025-68686 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-27 | KEV Due: 2026-08-10 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-16812 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-27 | KEV Due: 2026-07-30 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-16232 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-22 | KEV Due: 2026-07-25 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-50522 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-22 | KEV Due: 2026-07-25 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-60137 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-21 | KEV Due: 2026-08-04 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-63030 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-21 | KEV Due: 2026-07-24 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-0770 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-21 | KEV Due: 2026-07-24 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2021-27137 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-21 | KEV Due: 2026-07-24 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-58644 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-16 | KEV Due: 2026-07-19 | RW: Unknown | Sync: 1787638980
+CVE: CVE-2026-25089 | Source: HYBRID | Status: LIVE | KEV: 1 | Score: 90 (CRITICAL)
+  Pub: null | Mod: null | KEV Add: 2026-07-16 | KEV Due: 2026-07-19 | RW: Unknown | Sync: 1787638980
+
+=== SUMMARY ===
+Total records: 52
+NVD records: 52
+CISA KEV records: 42
+LIVE records: 40
+CACHED records: 12

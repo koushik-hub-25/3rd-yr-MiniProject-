@@ -220,12 +220,31 @@ export function extractSessionToken(req: Request): string | null {
 
 export async function authenticate(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   const token = extractSessionToken(req);
+
+  const isDbEndpoint = req.originalUrl.includes("/api/admin/database");
+  if (isDbEndpoint) {
+    console.log(`[DIAGNOSTIC] ${req.method} ${req.originalUrl}`);
+    console.log(`[DIAGNOSTIC] extractSessionToken found token:`, !!token);
+    console.log(`[DIAGNOSTIC] req.headers.cookie present:`, !!req.headers.cookie);
+  }
+
   if (!token) {
+    if (isDbEndpoint) console.log(`[DIAGNOSTIC] Returning 401 (No token)`);
     return res.status(401).json({ error: "Authentication required. Please log in." });
   }
 
   const user = await getUserFromSession(token);
+  
+  if (isDbEndpoint) {
+    console.log(`[DIAGNOSTIC] getUserFromSession returned user:`, !!user);
+    if (user) {
+      console.log(`[DIAGNOSTIC] User ID:`, user.id);
+      console.log(`[DIAGNOSTIC] User Role:`, user.role);
+    }
+  }
+
   if (!user) {
+    if (isDbEndpoint) console.log(`[DIAGNOSTIC] Returning 401 (Invalid session)`);
     return res.status(401).json({ error: "Session expired or invalid. Please log in again." });
   }
 

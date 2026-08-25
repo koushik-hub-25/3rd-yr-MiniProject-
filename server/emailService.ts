@@ -46,8 +46,10 @@ function getTransporter(forceSecure?: boolean) {
   const isGmail = service === "gmail" || (host ? host.toLowerCase().includes("gmail.com") : false);
   const secure = forceSecure || process.env.SMTP_SECURE === "true" || port === 465;
 
+  const isValidHost = host ? host.includes(".") && host.length > 3 : false;
+
   // Only attempt SMTP if real, non-placeholder credentials are provided
-  if ((host || isGmail) && user && pass && !host?.includes("example.com") && !host?.includes("your-provider.com")) {
+  if ((isValidHost || isGmail) && user && pass && !host?.includes("example.com") && !host?.includes("your-provider.com")) {
     if (isGmail) {
       return nodemailer.createTransport({
         service: "gmail",

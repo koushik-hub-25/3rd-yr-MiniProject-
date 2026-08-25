@@ -2390,8 +2390,8 @@ async function startServer() {
 
       res.cookie("szen_session", sessionId, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
+        secure: true,
+        sameSite: "none",
         maxAge: 30 * 24 * 60 * 60 * 1000,
         path: "/"
       });
@@ -2733,8 +2733,8 @@ async function startServer() {
 
       res.cookie("szen_session", sessionId, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
+        secure: true,
+        sameSite: "none",
         maxAge: 30 * 24 * 60 * 60 * 1000,
         path: "/"
       });
@@ -2909,7 +2909,7 @@ async function startServer() {
         }
       }
 
-      res.clearCookie("szen_session", { path: "/" });
+      res.clearCookie("szen_session", { path: "/", secure: true, sameSite: "none" });
       res.json({ success: true, message: "Logged out successfully." });
     } catch (err: any) {
       console.error("[Auth] Logout error:", err);
@@ -3070,6 +3070,75 @@ async function startServer() {
     } catch (err: any) {
       console.error("[Auth] Error fetching audit logs:", err);
       res.status(500).json({ error: "Failed to fetch audit logs" });
+    }
+  });
+
+  // --- Admin Database Explorer ---
+  app.get("/api/admin/database/tables", authenticate, requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const tables = [
+        "reports", "threats", "entities", "iocs", "incidents", "recommendations",
+        "predictions", "analystNotes", "assets", "threatActors", "campaigns",
+        "threatActorThreats", "threatActorIocs", "threatActorIncidents",
+        "campaignThreats", "campaignIocs", "campaignIncidents", "campaignMitreTechniques",
+        "intelligenceSources", "cachedVulnerabilities", "users", "sessions",
+        "audit_logs", "login_otp_challenges"
+      ];
+      
+      const counts = await Promise.all(tables.map(async (t) => {
+        const result = await db.run(sql`SELECT count(*) as count FROM ${sql.raw(t)}`);
+        return { name: t, count: Number(result.rows[0]?.count || 0) };
+      }));
+      
+      res.json(counts);
+    } catch (err) {
+      console.error("[DatabaseExplorer] Tables Error:", err);
+      res.status(500).json({ error: "Failed to list tables" });
+    }
+  });
+
+  app.get("/api/admin/database/table/:tableName", authenticate, requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const allowedTables = [
+        "reports", "threats", "entities", "iocs", "incidents", "recommendations",
+        "predictions", "analystNotes", "assets", "threatActors", "campaigns",
+        "threatActorThreats", "threatActorIocs", "threatActorIncidents",
+        "campaignThreats", "campaignIocs", "campaignIncidents", "campaignMitreTechniques",
+        "intelligenceSources", "cachedVulnerabilities", "users", "sessions",
+        "audit_logs", "login_otp_challenges"
+      ];
+      
+      const { tableName } = req.params;
+      if (!allowedTables.includes(tableName)) {
+        return res.status(400).json({ error: "Invalid table name" });
+      }
+
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string) || 50));
+      const offset = (page - 1) * limit;
+
+      let columnsToSelect = sql`*`;
+      if (tableName === "users") {
+        columnsToSelect = sql`id, name, email, role, emailVerified, createdAt, updatedAt, lastLogin`;
+      } else if (tableName === "sessions") {
+        columnsToSelect = sql`id, userId, expiresAt, ipAddress, userAgent, createdAt`;
+      } else if (tableName === "login_otp_challenges") {
+        columnsToSelect = sql`id, userId, expiresAt, verifiedAt, createdAt`;
+      } else if (tableName === "audit_logs") {
+        columnsToSelect = sql`id, timestamp, userId, userEmail, action, ipAddress`;
+      }
+
+      const rowsResult = await db.run(sql`SELECT ${columnsToSelect} FROM ${sql.raw(tableName)} LIMIT ${limit} OFFSET ${offset}`);
+      
+      res.json({
+        table: tableName,
+        rows: rowsResult.rows,
+        page,
+        limit,
+      });
+    } catch (err) {
+      console.error("[DatabaseExplorer] Table Fetch Error:", err);
+      res.status(500).json({ error: "Failed to fetch table data" });
     }
   });
 

@@ -56,6 +56,7 @@ import ThreatActors from "./pages/ThreatActors";
 import ThreatActorDetails from "./pages/ThreatActorDetails";
 import Campaigns from "./pages/Campaigns";
 import CampaignDetails from "./pages/CampaignDetails";
+import DatabaseExplorer from "./pages/DatabaseExplorer";
 
 function TopNavigation({ onOpenAiAssistant }: { onOpenAiAssistant: () => void }) {
   const location = useLocation();
@@ -468,6 +469,11 @@ function MainLayout() {
           <Route path="/emerging" element={<EmergingThreats />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/database-explorer" element={
+            <AdminRoute>
+              <DatabaseExplorer />
+            </AdminRoute>
+          } />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
@@ -496,6 +502,30 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   if (!isAuthenticated) {
     return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  return <>{children}</>;
+}
+
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, loading, user } = useAuth();
+  const location = useLocation();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#070B14] flex flex-col items-center justify-center text-cyan-400 gap-3 font-mono text-xs">
+        <div className="w-8 h-8 rounded-full border-2 border-cyan-500 border-t-transparent animate-spin" />
+        <span>Validating Security Clearance...</span>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  if (user?.role !== "admin") {
+    return <Navigate to="/" replace />;
   }
 
   return <>{children}</>;
