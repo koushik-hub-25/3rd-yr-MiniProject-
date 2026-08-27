@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, Badge } from "../components/ui";
-import { UploadCloud, FileText, CheckCircle, Loader2 } from "lucide-react";
+import { UploadCloud, FileText, CheckCircle, AlertCircle, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 export default function Upload() {
@@ -106,26 +106,35 @@ export default function Upload() {
             </div>
           )}
           
-          {status && (
-            <div className={`mt-4 flex items-center justify-between gap-2 text-sm p-3 rounded-lg border ${
-              status.includes("failed") || status.includes("error")
-                ? "text-red-400 bg-red-500/10 border-red-500/20"
-                : "text-blue-400 bg-blue-500/10 border-blue-500/20"
-            }`}>
-              <div className="flex items-center gap-2">
-                {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4 text-green-500" />}
-                <span>{status}</span>
+          {status && (() => {
+            const isErr = status.toLowerCase().includes("fail") || status.toLowerCase().includes("error") || status.toLowerCase().includes("invalid");
+            return (
+              <div className={`mt-4 flex items-center justify-between gap-2 text-sm p-3 rounded-lg border ${
+                isErr
+                  ? "text-red-400 bg-red-500/10 border-red-500/20"
+                  : "text-blue-400 bg-blue-500/10 border-blue-500/20"
+              }`}>
+                <div className="flex items-center gap-2">
+                  {uploading ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+                  ) : isErr ? (
+                    <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                  ) : (
+                    <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+                  )}
+                  <span>{status}</span>
+                </div>
+                {correlationSummary && !isErr && (
+                  <button
+                    onClick={() => navigate(`/reports/${correlationSummary.reportId}`)}
+                    className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-3 py-1.5 rounded transition-colors shrink-0"
+                  >
+                    View Dossier
+                  </button>
+                )}
               </div>
-              {correlationSummary && (
-                <button
-                  onClick={() => navigate(`/reports/${correlationSummary.reportId}`)}
-                  className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-3 py-1.5 rounded transition-colors"
-                >
-                  View Dossier
-                </button>
-              )}
-            </div>
-          )}
+            );
+          })()}
 
           {correlationSummary && (
             <div className="mt-6 p-5 bg-slate-900/90 rounded-xl border border-slate-800 space-y-4">

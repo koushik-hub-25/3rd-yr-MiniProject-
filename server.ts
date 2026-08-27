@@ -790,55 +790,124 @@ async function startServer() {
 
         filename = req.file.originalname;
         fileType = req.file.mimetype;
-
+        const buf = req.file.buffer;
+        const bufLen = buf.length;
         const origNameLower = req.file.originalname.toLowerCase();
+
+        // Helper to safely extract error message without assuming instance type
+        const extractErrorMessage = (err: unknown, fallback: string): string => {
+          if (err instanceof Error && err.message) return err.message;
+          if (typeof err === "string") return err;
+          if (err && typeof err === "object" && "message" in err && typeof (err as any).message === "string") {
+            return (err as any).message;
+          }
+          return fallback;
+        };
+
+        // 1. Check for Executable & Dangerous Binary Signatures
+        const isPE = bufLen >= 2 && buf[0] === 0x4D && buf[1] === 0x5A; // MZ
+        const isELF = bufLen >= 4 && buf[0] === 0x7F && buf[1] === 0x45 && buf[2] === 0x4C && buf[3] === 0x46; // ELF
+        const isMachO = bufLen >= 4 && ((buf[0] === 0xFE && buf[1] === 0xED && buf[2] === 0xFA) || (buf[0] === 0xCA && buf[1] === 0xFE && buf[2] === 0xBA && buf[3] === 0xBE));
+
         if (
-          req.file.mimetype === "application/pdf" ||
-          origNameLower.endsWith(".pdf")
+          isPE || isELF || isMachO ||
+          origNameLower.endsWith(".exe") ||
+          origNameLower.endsWith(".dll") ||
+          origNameLower.endsWith(".bin") ||
+          origNameLower.endsWith(".sh") ||
+          origNameLower.endsWith(".bat")
         ) {
+          return res.status(400).json({ error: `Executable and binary file formats are not permitted. Supported formats: .TXT, .PDF, .DOCX, .LOG.` });
+        }
+
+        // 2. Content & Magic Signature Inspection
+        const isPdfMagic = bufLen >= 4 && buf.slice(0, Math.min(1024, bufLen)).indexOf(Buffer.from("%PDF-")) !== -1;
+        const isZipMagic = bufLen >= 4 && buf[0] === 0x50 && buf[1] === 0x4B && (buf[2] === 0x03 || buf[2] === 0x05 || buf[2] === 0x07);
+
+        // Check for binary null bytes (plain text vs binary heuristic)
+        let nullByteCount = 0;
+        const sampleCheckLen = Math.min(4096, bufLen);
+        for (let i = 0; i < sampleCheckLen; i++) {
+          if (buf[i] === 0x00) nullByteCount++;
+        }
+        const hasBinaryBytes = nullByteCount > 0;
+
+        // --- Route A: PDF Parsing (Requires %PDF- signature or valid PDF stream) ---
+        if (isPdfMagic || (origNameLower.endsWith(".pdf") && req.file.mimetype === "application/pdf")) {
           try {
             const pdfModule = await import("pdf-parse") as any;
             const pdfParse = pdfModule.default || pdfModule;
-            const data = await pdfParse(req.file.buffer);
-            text = data.text || "";
-            if (!text.trim()) {
+            const data = await pdfParse(buf);
+            text = (data.text || "").trim();
+            if (!text) {
               return res.status(400).json({ error: "The uploaded PDF document contains no extractable text." });
             }
-          } catch (e: any) {
-            console.error("PDF parse error:", e);
-            return res.status(400).json({ error: "Failed to extract text from PDF: " + (e?.message || "Invalid or unreadable document.") });
-          }
-        } else if (
-          req.file.mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-          req.file.mimetype === "application/msword" ||
-          origNameLower.endsWith(".docx") ||
-          origNameLower.endsWith(".doc")
-        ) {
-          try {
-            const mammothModule = await import("mammoth") as any;
-            const mammoth = mammothModule.default || mammothModule;
-            const result = await mammoth.extractRawText({ buffer: req.file.buffer });
-            text = result.value || "";
-            if (!text.trim()) {
-              return res.status(400).json({ error: "The uploaded DOCX document contains no extractable text content." });
+          } catch (e: unknown) {
+            // If pdf-parse failed on a misnamed plain text file, attempt clean text decode
+            if (!hasBinaryBytes) {
+              text = buf.toString("utf-8").trim();
             }
-          } catch (e: any) {
-            console.error("DOCX parse error:", e);
-            return res.status(400).json({ error: "Failed to parse DOCX document: " + (e?.message || "Invalid or unreadable document.") });
+            if (!text) {
+              return res.status(400).json({ error: "Failed to extract text from PDF: " + extractErrorMessage(e, "Invalid or unreadable document.") });
+            }
           }
-        } else if (
-          req.file.mimetype.startsWith("text/") ||
-          origNameLower.endsWith(".txt") ||
-          origNameLower.endsWith(".log") ||
-          origNameLower.endsWith(".csv") ||
-          origNameLower.endsWith(".json")
-        ) {
-          text = req.file.buffer.toString("utf-8");
-          if (!text.trim()) {
+        }
+        // --- Route B: Genuine DOCX (Requires ZIP signature AND OOXML package markers) ---
+        else if (isZipMagic) {
+          const isDocxPackage = buf.indexOf(Buffer.from("word/")) !== -1 ||
+                                buf.indexOf(Buffer.from("word/document.xml")) !== -1 ||
+                                buf.indexOf(Buffer.from("[Content_Types].xml")) !== -1;
+
+          if (isDocxPackage || origNameLower.endsWith(".docx") || origNameLower.endsWith(".doc")) {
+            try {
+              // 1. Primary robust extractor: Native JSZip OOXML document extraction (Zero Bluebird/Bun compatibility issues)
+              const jszipModule = await import("jszip") as any;
+              const JSZip = jszipModule.default || jszipModule;
+              const zip = await JSZip.loadAsync(buf);
+              const docXmlFile = zip.file("word/document.xml") || zip.file("word/document2.xml");
+
+              if (docXmlFile) {
+                const xml = await docXmlFile.async("string");
+                const withBreaks = xml
+                  .replace(/<\/w:p>/gi, "\n")
+                  .replace(/<w:br\/>/gi, "\n")
+                  .replace(/<w:cr\/>/gi, "\n")
+                  .replace(/<w:tab\/>/gi, "\t");
+                text = withBreaks.replace(/<[^>]+>/g, "").replace(/\n\s*\n+/g, "\n\n").trim();
+              }
+
+              // 2. Secondary fallback to Mammoth if direct XML was empty
+              if (!text) {
+                try {
+                  const mammothModule = await import("mammoth") as any;
+                  const mammoth = mammothModule.default || mammothModule;
+                  const result = await mammoth.extractRawText({ buffer: buf });
+                  text = (result.value || "").trim();
+                } catch {
+                  // Fallback safely ignored if JSZip already handled
+                }
+              }
+
+              if (!text) {
+                return res.status(400).json({ error: "The uploaded DOCX document contains no extractable text content." });
+              }
+            } catch (e: unknown) {
+              return res.status(400).json({ error: "Failed to parse DOCX document: " + extractErrorMessage(e, "Invalid or unreadable document.") });
+            }
+          } else {
+            return res.status(400).json({ error: "Uploaded ZIP archive is not a valid DOCX document." });
+          }
+        }
+        // --- Route C: Plain Text / Misnamed Text Files / Log Files ---
+        else if (!hasBinaryBytes) {
+          text = buf.toString("utf-8").trim();
+          if (!text) {
             return res.status(400).json({ error: "Uploaded text document is empty." });
           }
-        } else {
-          return res.status(400).json({ error: `Unsupported file format '${req.file.originalname}'. Supported formats: .TXT, .PDF, .DOCX.` });
+        }
+        // --- Route D: Unsupported Binary ---
+        else {
+          return res.status(400).json({ error: `Unsupported or binary file format '${req.file.originalname}'. Supported formats: .TXT, .PDF, .DOCX, .LOG.` });
         }
       } else if (req.body.text) {
         text = String(req.body.text);
