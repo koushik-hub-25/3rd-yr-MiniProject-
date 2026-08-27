@@ -1,16 +1,18 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { Card, CardHeader, CardTitle, CardContent, Badge, SeverityBadge } from "../components/ui";
 import { MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-import { MapPin, Globe, ShieldAlert, Filter, Layers, ExternalLink, Activity } from "lucide-react";
+import { MapPin, Globe, ShieldAlert, Filter, Layers, ExternalLink, Activity, Radio } from "lucide-react";
 import { Link } from "react-router-dom";
+import { useRealtimeEvent, useRealtime } from "../context/RealtimeContext";
 
 export default function ThreatMap() {
   const [points, setPoints] = useState<any[]>([]);
   const [selectedFilter, setSelectedFilter] = useState("ALL");
   const [loading, setLoading] = useState(true);
+  const { status: sseStatus } = useRealtime();
 
-  useEffect(() => {
+  const fetchHeatmap = useCallback(() => {
     fetch("/api/heatmap")
       .then(r => r.json())
       .then(data => {
@@ -23,6 +25,21 @@ export default function ThreatMap() {
         setLoading(false);
       });
   }, []);
+
+  useEffect(() => {
+    fetchHeatmap();
+  }, [fetchHeatmap]);
+
+  // Real-Time Event Listeners
+  useRealtimeEvent("threatmap.updated", () => {
+    fetchHeatmap();
+  });
+  useRealtimeEvent("intelligence.synced", () => {
+    fetchHeatmap();
+  });
+  useRealtimeEvent("report.correlated", () => {
+    fetchHeatmap();
+  });
 
   const filteredPoints = points.filter(p => {
     const w = p.weight ?? (p.severity === "CRITICAL" ? 9 : p.severity === "HIGH" ? 7 : p.severity === "MEDIUM" ? 5 : 3);
@@ -102,18 +119,38 @@ export default function ThreatMap() {
                   weight={1.5}
                 >
                   <Popup className="custom-popup">
-                    <div className="p-1 space-y-1 text-slate-900 font-sans">
-                      <div className="font-bold text-xs uppercase tracking-wider text-slate-900 border-b pb-1">
-                        {p.location || "Regional Node"}
+                    <div className="p-2 space-y-1.5 text-slate-900 font-sans min-w-[200px]">
+                      <div className="flex items-center justify-between border-b pb-1">
+                        <div className="font-bold text-xs uppercase tracking-wider text-slate-900">
+                          {p.location || "Regional Node"}
+                        </div>
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                          p.riskLevel === "CRITICAL" ? "bg-red-100 text-red-700" :
+                          p.riskLevel === "HIGH" ? "bg-orange-100 text-orange-700" :
+                          p.riskLevel === "MEDIUM" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"
+                        }`}>
+                          Risk {p.riskScore ?? (w * 10)}/100
+                        </span>
                       </div>
                       <div className="text-[11px] font-semibold text-slate-800">
-                        Category: {p.category || "Cyber Threat"}
+                        Vector: {p.category || "Cyber Threat"}
                       </div>
-                      <div className="text-[11px] text-slate-600 font-mono">
-                        Threat Density: {w} / 10
+                      <div className="text-[11px] text-slate-700 flex items-center justify-between">
+                        <span>Events: {p.incidentCount || 1}</span>
+                        {p.kevStatus && (
+                          <span className="bg-red-600 text-white font-bold text-[9px] px-1.5 py-0.2 rounded">
+                            CISA KEV
+                          </span>
+                        )}
                       </div>
-                      <div className="text-[10px] text-slate-500 pt-1">
-                        Coordinates: {p.lat.toFixed(2)}, {p.lng.toFixed(2)}
+                      {p.iocCount > 0 && (
+                        <div className="text-[10px] text-slate-600">
+                          Linked IOCs: {p.iocCount}
+                        </div>
+                      )}
+                      <div className="text-[9px] text-slate-500 pt-1 border-t flex items-center justify-between font-mono">
+                        <span>[{p.lat.toFixed(2)}, {p.lng.toFixed(2)}]</span>
+                        <span>{p.sources?.[0] || "Telemetry"}</span>
                       </div>
                     </div>
                   </Popup>
@@ -125,17 +162,20 @@ export default function ThreatMap() {
           {/* Map Legend Overlay */}
           <div className="absolute bottom-4 left-4 z-[1000] bg-slate-950/90 backdrop-blur border border-slate-800 p-3 rounded-lg text-xs space-y-1.5 shadow-2xl pointer-events-auto">
             <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-              Severity Indicator Density
+              Deterministic Threat Risk
             </div>
             <div className="flex items-center gap-3">
               <span className="flex items-center gap-1 text-[11px] text-slate-300">
-                <span className="w-2.5 h-2.5 rounded-full bg-red-500"></span> Critical (8-10)
+                <span className="w-2.5 h-2.5 rounded-full bg-red-500"></span> Critical (85-100)
               </span>
               <span className="flex items-center gap-1 text-[11px] text-slate-300">
-                <span className="w-2.5 h-2.5 rounded-full bg-orange-500"></span> High (6-7)
+                <span className="w-2.5 h-2.5 rounded-full bg-orange-500"></span> High (70-84)
               </span>
               <span className="flex items-center gap-1 text-[11px] text-slate-300">
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span> Med (4-5)
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span> Med (45-69)
+              </span>
+              <span className="flex items-center gap-1 text-[11px] text-slate-300">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Low (0-44)
               </span>
             </div>
           </div>
@@ -160,15 +200,23 @@ export default function ThreatMap() {
                     {pt.location}
                   </span>
                   <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                    pt.weight >= 8 ? "bg-red-950 text-red-400" : pt.weight >= 6 ? "bg-orange-950 text-orange-400" : "bg-amber-950 text-amber-400"
+                    (pt.riskScore ?? (pt.weight * 10)) >= 85 ? "bg-red-950 text-red-400 border border-red-800/40" :
+                    (pt.riskScore ?? (pt.weight * 10)) >= 70 ? "bg-orange-950 text-orange-400 border border-orange-800/40" :
+                    (pt.riskScore ?? (pt.weight * 10)) >= 45 ? "bg-amber-950 text-amber-400 border border-amber-800/40" :
+                    "bg-emerald-950 text-emerald-400 border border-emerald-800/40"
                   }`}>
-                    Density {pt.weight}/10
+                    Risk {pt.riskScore ?? (pt.weight * 10)}/100
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
                   <span>{pt.category}</span>
                   <span>[{pt.lat.toFixed(1)}, {pt.lng.toFixed(1)}]</span>
                 </div>
+                {pt.kevStatus && (
+                  <div className="flex items-center gap-1 text-[10px] text-red-400 font-semibold">
+                    <ShieldAlert className="w-3 h-3 text-red-400" /> CISA KEV Active Exploitation
+                  </div>
+                )}
               </div>
             ))}
           </CardContent>

@@ -11,6 +11,7 @@ import {
   SourceBadge,
   cn
 } from "../components/ui";
+import { useRealtimeEvent } from "../context/RealtimeContext";
 import {
   ShieldAlert,
   FileText,
@@ -161,6 +162,20 @@ export default function Dashboard() {
   useEffect(() => {
     fetchDashboardData();
   }, []);
+
+  // Real-Time SSE Targeted Refreshes
+  useRealtimeEvent("intelligence.synced", () => {
+    fetchDashboardData(true);
+  });
+  useRealtimeEvent("report.correlated", () => {
+    fetchDashboardData(true);
+  });
+  useRealtimeEvent("vulnerability.updated", () => {
+    fetchDashboardData(true);
+  });
+  useRealtimeEvent("threatmap.updated", () => {
+    fetchDashboardData(true);
+  });
 
   const handleMarkReviewed = async (threatId: string, e: React.MouseEvent) => {
     e.stopPropagation();

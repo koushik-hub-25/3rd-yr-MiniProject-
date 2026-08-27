@@ -361,6 +361,26 @@ async function createTables() {
   `);
 
   await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS mitreTechniques (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      tactics TEXT NOT NULL,
+      tacticIds TEXT,
+      description TEXT,
+      detection TEXT,
+      mitigation TEXT,
+      url TEXT,
+      version TEXT,
+      isSubtechnique INTEGER DEFAULT 0,
+      parentTechniqueId TEXT,
+      source TEXT NOT NULL DEFAULT 'MITRE ATT&CK Enterprise',
+      sourceStatus TEXT DEFAULT 'CACHED',
+      lastModifiedDate TEXT,
+      lastSyncedAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+  `);
+
+  await activeClient.execute(`
     CREATE TABLE IF NOT EXISTS intelligenceSources (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -461,6 +481,16 @@ async function createTables() {
       invalidatedAt INTEGER
     );
   `);
+
+  // Performance & Deduplication Indexing
+  try {
+    await activeClient.execute("CREATE INDEX IF NOT EXISTS idx_iocs_type_val ON iocs (type, value);");
+    await activeClient.execute("CREATE INDEX IF NOT EXISTS idx_cached_vuln_source ON cachedVulnerabilities (source);");
+    await activeClient.execute("CREATE INDEX IF NOT EXISTS idx_cached_vuln_kev ON cachedVulnerabilities (isCisaKev);");
+    await activeClient.execute("CREATE INDEX IF NOT EXISTS idx_mitre_tactics ON mitreTechniques (tactics);");
+  } catch (e) {
+    console.warn("[DB] Index creation notice:", e);
+  }
 }
 
 export async function initDatabaseTables(): Promise<void> {

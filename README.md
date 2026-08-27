@@ -1,472 +1,301 @@
-🛡️ ShieldZen
-AI-Powered Cyber Threat Intelligence & Security Operations Platform
+# 🛡️ ShieldZen — Cyber Threat Intelligence & Operations Platform
 
-ShieldZen is an AI-assisted Cyber Threat Intelligence (CTI) and Security Operations platform designed to help security analysts collect, correlate, investigate, prioritize, and respond to cyber threats.
+**ShieldZen** is a high-performance, real-time Cyber Threat Intelligence (CTI) and Security Operations platform designed for academic demonstration and operational intelligence analysis. The platform unifies live external intelligence feeds, analyst artifact uploads, structured indicator normalization, multi-source correlation, deterministic risk scoring, geospatial heatmap clustering, and Server-Sent Events (SSE) into a modern, reactive interface.
 
-The platform combines external threat intelligence sources, vulnerability intelligence, IOC analysis, MITRE ATT&CK techniques, AI-assisted analysis, risk scoring, incident management, and security analytics into a unified interface.
+---
 
-📌 Overview
+## 1. System Architecture & Data Flow
 
-Modern cybersecurity teams receive information from many different sources:
+```
+   ┌───────────────────────┐   ┌───────────────────────┐   ┌───────────────────────┐
+   │  NIST NVD API 2.0     │   │     CISA KEV Feed     │   │   MITRE ATT&CK STIX   │
+   │  (120-Day Mod Window) │   │ (1,682 Active Vulns)  │   │  (Enterprise Matrix)  │
+   └───────────┬───────────┘   └───────────┬───────────┘   └───────────┬───────────┘
+               │                           │                           │
+               └───────────────────┬───────┴───────────────────────────┘
+                                   │
+                     ┌─────────────▼─────────────┐
+                     │ CTI Synchronization Layer │
+                     └─────────────┬─────────────┘
+                                   │
+┌─────────────────────────┐        │
+│ Analyst Upload Pipeline ├────────┤
+│ (PDF / DOCX / TXT / Log)│        │
+└─────────────────────────┘        ▼
+                     ┌───────────────────────────┐
+                     │ Normalization & Dedup     │
+                     │ (Refang, Typing, Dedup)   │
+                     └─────────────┬─────────────┘
+                                   │
+                     ┌─────────────▼─────────────┐
+                     │ Multi-Source Correlation  │
+                     │ (Provenance Tracking)     │
+                     └─────────────┬─────────────┘
+                                   │
+                     ┌─────────────▼─────────────┐
+                     │ SQLite / LibSQL Database  │
+                     │ (WAL Mode, 2,769 Rows)    │
+                     └─────────────┬─────────────┘
+                                   │
+                     ┌─────────────▼─────────────┐
+                     │ Deterministic Risk Engine │
+                     │ (30-Day Half-Life Decay)  │
+                     └──────┬─────────────┬──────┘
+                            │             │
+              ┌─────────────▼───┐     ┌───▼─────────────┐
+              │ Geospatial Map  │     │ Server Event    │
+              │ (Clustered)     │     │ Bus (SSE)       │
+              └─────────────────┘     └───┬─────────────┘
+                                          │ (GET /api/events/stream)
+                                          ▼
+                              ┌─────────────────────────┐
+                              │ React 19 Real-Time UI   │
+                              │ (Targeted Revalidation) │
+                              └─────────────────────────┘
+```
 
-Vulnerability databases
-Threat intelligence feeds
-Security reports
-Indicators of compromise (IOCs)
-Malware intelligence
-Threat actor information
-Security incidents
-MITRE ATT&CK techniques
+---
 
-The challenge is not simply collecting this information, but correlating it and determining what actually matters.
+## 2. External CTI Source Integrations
 
-ShieldZen aims to solve this problem by providing a centralized platform that can:
+### A. NIST National Vulnerability Database (NVD API 2.0)
+- **API Standard:** Official NIST NVD REST API 2.0.
+- **Modification Window:** Implements compliant `lastModStartDate` and `lastModEndDate` parameters strictly bounded within the NVD API 120-day maximum query window.
+- **Pagination & Rate Limits:** Automates pagination (`startIndex`, `resultsPerPage=2000`) with rate-limit compliance delays (650ms with API key, 3500ms without).
+- **Checkpoint Safety:** Checkpoints (`lastSuccessfulSync`) are persisted **only** upon full successful batch ingestion. Interrupted network queries fail gracefully without creating silent data gaps.
+- **Metadata Ingestion:** Extracts CVSS v3.1 base score, severity, vector strings, CWE classifications, and vendor references.
 
-Collect → Extract → Correlate → Prioritize → Investigate → Respond
+### B. CISA Known Exploited Vulnerabilities (KEV)
+- **Catalog Feed:** Complete ingestion of the official CISA KEV JSON feed.
+- **Catalog Size:** Ingests all 1,682 authoritative KEV vulnerabilities into SQLite without artificial truncation.
+- **Ransomware Mapping:** Parses and attributes `knownRansomwareCampaignUse` ("Known" vs "Unknown") to accelerate high-priority ransomware defense.
+- **Hybrid CVE Merging:** Links authoritative CISA KEV metadata with corresponding NVD CVSS scores under the `HYBRID` source classification.
 
-🎯 Objectives
+### C. MITRE ATT&CK Enterprise Matrix
+- **Data Source:** Official MITRE ATT&CK Enterprise STIX machine-readable feed.
+- **Storage:** Dedicated `mitreTechniques` SQLite table caching **697** techniques and sub-techniques.
+- **Metadata:** Caches technique ID (e.g., `T1190`, `T1059.001`), name, tactic groupings, full markdown descriptions, detection guidance, and mitigation recommendations.
+- **Multi-Tiered Resolution:** Dynamic in-memory cache $\to$ SQLite table $\to$ resilient offline fallback.
 
-The main objectives of ShieldZen are:
+---
 
-Centralize cyber threat intelligence from multiple sources.
-Extract useful security information from threat reports.
-Identify and manage Indicators of Compromise (IOCs).
-Correlate vulnerabilities with known exploitation and threat intelligence.
-Map threats to MITRE ATT&CK techniques.
-Prioritize threats using explainable risk scoring.
-Assist analysts using AI-powered threat analysis.
-Track security incidents and their investigation lifecycle.
-Provide visualization and analytics for security operations.
-Support future integration with structured CTI standards such as STIX/TAXII.
-🚀 Current Features
+## 3. Data Provenance Model
 
-ShieldZen currently provides several cybersecurity intelligence capabilities.
+ShieldZen explicitly enforces strict provenance segregation to ensure analyst uploads or AI derivations are never misrepresented as authoritative government intelligence:
 
-🔍 Threat Intelligence
-Threat intelligence dashboard
-Threat reports
-Threat severity classification
-Threat categorization
-Threat search and filtering
-Threat intelligence analytics
-🧩 IOC Intelligence
+| Provenance Label | Authority Level | Description |
+| :--- | :---: | :--- |
+| **`AUTHORITATIVE_NVD`** | Highest | Official NIST National Vulnerability Database metrics (CVSS, CWE). |
+| **`AUTHORITATIVE_CISA`**| Highest | Confirmed in-the-wild exploitation cataloged in official CISA KEV. |
+| **`AUTHORITATIVE_MITRE`**| Highest | Official adversary tactics and techniques from MITRE ATT&CK STIX. |
+| **`HYBRID`** | High | Multi-source fused intelligence (NVD CVE enriched with CISA KEV). |
+| **`ANALYST_UPLOAD`** | Contextual | Security findings, IOCs, and narratives extracted from uploaded documents. |
+| **`AI_DERIVED`** | Contextual | Synthesized summaries and predictions generated by the deterministic/AI engine. |
 
-Support for multiple IOC types, including:
+---
 
-IP addresses
-Domains
-URLs
-File hashes
-CVEs
-Filenames
-Other extracted indicators
-🧠 AI-Assisted Analysis
+## 4. Multi-Format Upload & Correlation Pipeline
 
-AI capabilities are used to assist with:
+### Supported Formats & Security Boundaries
+- **Supported Formats:** `.TXT`, `.PDF` (via `pdf-parse`), `.DOCX` (via `mammoth`), and `.LOG`.
+- **File Size Limit:** 15MB maximum enforced with clean HTTP 400 rejection for oversized or executable files.
+- **Safe Sandbox:** Extracted text is processed entirely in memory; files are never executed on the host system.
 
-Threat report analysis
-IOC extraction
-Threat classification
-Threat summaries
-Security recommendations
-Analyst assistance
-🛡️ Vulnerability Intelligence
+### Automated Extraction & IOC Normalization
+1. **Refanging / Defanging:** Automatically normalizes obfuscated indicators (e.g., `203[.]0[.]113[.]50` $\to$ `203.0.113.50`, `hxxps[://]` $\to$ `https://`, `user[@]domain[.]com` $\to$ `user@domain.com`).
+2. **Supported IOC Types:** `IPv4`, `IPv6`, `domain`, `URL`, `SHA256`, `SHA1`, `MD5`, `email`.
+3. **Type Segregation:** IOCs are normalized and keyed by `(type, normalizedValue)` so distinct semantic types (e.g., a domain vs. an email) are never merged.
+4. **CTI Correlation:** Automatically matches extracted CVEs against the local 1,695-vulnerability cache and links observed execution behaviors to the 697-technique MITRE matrix.
 
-Integration with vulnerability intelligence sources including:
+### Safe Demonstration Artifact
+```text
+CONFIDENTIAL THREAT ADVISORY - ADVANCED CAMPAIGN DISCLOSURE
+Threat Actor: APT-Synthetic-Storm (Adversary Cluster)
+Target Sector: Financial and Energy Infrastructure
 
-National Vulnerability Database (NVD)
-CISA Known Exploited Vulnerabilities (KEV)
+Vulnerability Exploitation:
+Adversaries actively exploited CVE-2023-34362 (MOVEit Transfer SQLi) to gain initial access via T1190 (Exploit Public-Facing Application).
+Following compromise, PowerShell execution (T1059.001) was initiated to deploy ransomware encryptors (T1486).
 
-Vulnerabilities can be correlated with threat intelligence to improve prioritization.
+Indicators of Compromise:
+C2 Server IPv4: 203[.]0[.]113[.]50
+Malicious Exfiltration Domain: bad-actor-c2[.]example[.]com
+Phishing Ingress URL: hxxps[://]payload-drop[.]example[.]com/invoice[.]exe
+Staging Dropper SHA256: 7d793037a0760186574b0282f2f435e70d4f67d69d7a2292f7c0065ad7142d7d
+Actor Contact: dropper-admin[@]threat-sample[.]org
 
-🎯 MITRE ATT&CK
+Analyst Recommendation:
+Apply vendor patch for CVE-2023-34362 immediately. Block listed IOCs on perimeter firewalls.
+```
 
-Threats can be associated with MITRE ATT&CK techniques to help analysts understand attacker behavior and tactics.
+---
 
-📊 Analytics
+## 5. Deterministic Multi-Factor Risk Scoring Engine
 
-The platform provides security analytics including:
+ShieldZen replaces opaque, non-reproducible AI scores with an **explainable, deterministic mathematical model**:
 
-Threat trends
-Severity distribution
-Threat activity
-Incident statistics
-Risk information
-🗺️ Threat Visualization
+$$\text{Risk Score} = 0.30 \times \text{Severity} + 0.20 \times \text{Recency} + 0.15 \times \text{IOC} + 0.15 \times \text{KEV} + 0.10 \times \text{CVSS} + 0.10 \times \text{MITRE}$$
 
-Threat activity can be visualized geographically to provide an overview of potential threat activity.
+$$\text{Final Score} = \min\left(100, \max\left(0, \text{round}(\text{Risk Score})\right)\right)$$
 
-🚨 Incident Management
+### Factor Breakdown ($0–100$ Scale):
+1. **Threat Severity ($S$, Weight: $30\%$):** `CRITICAL` = 100, `HIGH` = 75, `MEDIUM` = 50, `LOW` = 25, `UNKNOWN` = 40.
+2. **Recency ($R$, Weight: $20\%$):** Exact **30-day half-life exponential time decay**:
+   $$\text{Recency} = \text{round}\left(100 \times 2^{-\frac{\text{ageHours}}{720}}\right)$$
+   - *Day 0 (Fresh):* $100 \to +20.0\text{ pts}$
+   - *Day 30 (1 Half-life):* $50 \to +10.0\text{ pts}$
+   - *Day 60 (2 Half-lives):* $25 \to +5.0\text{ pts}$
+   - *Day 90 (3 Half-lives):* $13 \to +2.6\text{ pts}$
+3. **IOC Evidence ($I$, Weight: $15\%$):** $\min\left(100, \text{round}\left((\text{iocCount} \times 20) \times \frac{\text{avgConfidence}}{100}\right)\right)$.
+4. **CISA KEV Exploitation ($K$, Weight: $15\%$):** Active KEV with known ransomware = 100, Active KEV without ransomware = 85, Not in KEV = 0.
+5. **CVSS Base Metric ($C$, Weight: $10\%$):** $\min(100, \text{round}(\text{CVSS} \times 10))$. Missing CVSS safely defaults to neutral baseline **50** ($+5.0\text{ pts}$).
+6. **MITRE ATT&CK Mapping ($M$, Weight: $10\%$):** $\min(100, \text{techniqueCount} \times 25)$ (1 technique: 25, 2: 50, 3: 75, 4+: 100).
 
-Security incidents can be created and tracked alongside associated threats, indicators, and recommendations.
+### Risk Categories:
+- **`CRITICAL`**: $85 - 100$
+- **`HIGH`**: $70 - 84$
+- **`MEDIUM`**: $45 - 69$
+- **`LOW`**: $0 - 44$
 
-🏗️ Planned Security Operations Features
+---
 
-ShieldZen is being continuously developed toward a more complete Security Operations platform.
+## 6. Geospatial Threat Heatmap
 
-The planned roadmap includes:
+- **API Endpoints:** `GET /api/heatmap` (Array) and `GET /api/heatmap?format=envelope` (Structured Envelope).
+- **Geographic Integrity:** Coordinates are strictly validated (Latitude: $-90^\circ$ to $+90^\circ$, Longitude: $-180^\circ$ to $+180^\circ$). **Coordinates are never invented.** Events without coordinates are safely preserved in the database without generating false markers.
+- **Clustered Multi-Event Nodes:** Aggregates multiple incidents at identical coordinates into a single clustered node containing:
+  - `riskScore`: Maximum deterministic risk score.
+  - `riskLevel`: Corresponding tier (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`).
+  - `weight`: Display scaling factor ($1-10$).
+  - `incidentCount`: Number of clustered events.
+  - `kevStatus`: Active KEV exploitation flag.
+  - `sources`: Deduplicated source provenance array.
+  - `firstSeen` & `lastSeen`: Temporal range of observed incidents.
 
-1. Asset Management
+---
 
-Track organizational assets and correlate them with:
+## 7. Real-Time Server-Sent Events (SSE) Bus
 
-Software
-Vulnerabilities
-Threats
-IOCs
-Exposure
-Risk
-2. Explainable Risk Scoring
+- **Stream Endpoint:** `GET /api/events/stream`
+- **Architecture:** Lightweight, high-throughput in-memory `EventEmitter` broadcasting sequenced, timestamped JSON frames.
+- **Keep-Alive:** Sends periodic heartbeat frames every 20 seconds.
+- **Security & Sanitization:** Automatically scrubs API keys, environment variables, passwords, tokens, and raw document dumps before broadcasting.
 
-A transparent risk engine will consider factors such as:
+### Supported Event Types:
+- `connected`: Initial client handshake with live data source telemetry.
+- `heartbeat`: 20-second keep-alive frame.
+- `intelligence.synced`: NVD / CISA / MITRE sync completion notice.
+- `report.correlated`: Document upload and CTI correlation summary.
+- `threatmap.updated`: Geospatial incident change notice.
+- `vulnerability.updated`: High-impact vulnerability modification notice.
 
-CVSS severity
-Known exploitation
-CISA KEV status
-Asset criticality
-Internet exposure
-Threat activity
-Recency
-Exploit availability
+---
 
-The goal is to provide analysts with both a score and an explanation of why a threat is considered high risk.
+## 8. React 19 Frontend Real-Time Architecture
 
-3. IOC Investigation
+- **Singleton EventSource Provider:** `<RealtimeProvider>` manages a single shared connection with exponential reconnection backoff ($2\text{s} \to 15\text{s}$).
+- **Targeted Hook:** `useRealtimeEvent(eventType, callback)` allows components to subscribe to specific events without polling or full-page refreshes.
+- **Top-Nav Status Pill:** Displays `LIVE` (Green pulse), `RECONNECTING` (Amber), or `OFFLINE` (Red).
+- **Preserved UI State:** Map zoom, center, active filters, and open popups are preserved during background data revalidations.
 
-Analysts will be able to investigate an IOC and discover relationships with:
+---
 
-Threats
-Reports
-Malware
-Campaigns
-Threat actors
-Other IOCs
-Vulnerabilities
-4. Incident Response Workflow
+## 9. Database Evolution & Baseline Verification
 
-Incidents will follow a structured lifecycle:
+- **Storage Engine:** SQLite / LibSQL (`file:local.db`) in Write-Ahead Logging (`WAL`) mode.
+- **Original Phase A Baseline:** 336 rows (59 baseline vulnerabilities).
+- **Final Verified Phase K State:** **2,769** total rows across 25 tables.
+  - `cachedVulnerabilities`: **`1,695`** (1,685 KEVs + 10 NVD)
+  - `mitreTechniques`: **`697`** (Enterprise STIX Matrix)
+  - `threats`: `35`
+  - `incidents`: `36`
+  - `reports`: `22`
+  - `iocs`: `48`
+- **Deduplication Audit:** Duplicate CVEs = 0, Duplicate IOCs = 0, Duplicate MITRE IDs = 0.
+- **Phase A Backup:** Verified intact at `backups/local_backup_2026-08-27T04-56-21-106Z.db` (`PRAGMA integrity_check = ok`).
 
-New
- ↓
-Triage
- ↓
-Investigation
- ↓
-Containment
- ↓
-Eradication
- ↓
-Recovery
- ↓
-Closed
+---
 
-5. AI SOC Analyst
+## 10. Verified API Endpoint Reference
 
-An AI-assisted SOC analyst will help security analysts:
+| Endpoint | Method | Auth | Description |
+| :--- | :---: | :---: | :--- |
+| `/api/config` | `GET` | Public | System engine configuration & mode status. |
+| `/api/stats` | `GET` | Public | Top-level dashboard counters and severity distributions. |
+| `/api/threats` | `GET` | Public | Threat intelligence catalog and correlation records. |
+| `/api/incidents` | `GET` | Public | Logged security incidents with geolocation telemetry. |
+| `/api/predictions` | `GET` | Public | Risk trajectory predictions and trend models. |
+| `/api/heatmap` | `GET` | Public | Clustered geospatial threat heatmap nodes (`?format=envelope` supported). |
+| `/api/datasources` | `GET` | Public | Live telemetry status for NVD, CISA KEV, and MITRE feeds. |
+| `/api/datasources/:source/sync` | `POST` | Admin | Manually triggers synchronization for `nvd`, `cisa_kev`, or `mitre`. |
+| `/api/events/stream` | `GET` | Public | Server-Sent Events (SSE) real-time event stream. |
+| `/api/upload` | `POST` | Public | Uploads and correlates `.TXT`, `.PDF`, or `.DOCX` intelligence reports. |
+| `/api/reports/:id/reanalyze` | `POST` | Public | Re-runs CTI correlation and normalization for an existing report. |
+| `/api/mitre/:techniqueId` | `GET` | Public | Multi-tiered lookup for MITRE ATT&CK techniques. |
 
-Investigate threats
-Explain risk
-Summarize incidents
-Recommend actions
-Identify related IOCs
-Prioritize investigations
-6. Threat Knowledge Graph
+---
 
-A relationship graph will connect:
+## 11. Installation & Running Guide
 
-Threat Actor
-      ↓
-Campaign
-      ↓
-Malware
-      ↓
-IOC
-      ↓
-Threat
-      ↓
-Vulnerability
-      ↓
-Asset
+### Prerequisites
+- **Runtime:** [Bun](https://bun.sh/) (v1.1+) or Node.js (v20+ with npm)
+- **Operating System:** Windows, macOS, or Linux
 
-7. MITRE ATT&CK Attack-Chain Visualization
-
-Threat activity will be visualized using MITRE ATT&CK tactics and techniques to help analysts understand possible attack chains.
-
-8. Real-Time Alerts
-
-The platform will support configurable alerts for events such as:
-
-Critical vulnerabilities
-CISA KEV matches
-High-risk assets
-New IOCs
-Emerging threats
-Suspicious activity
-9. AI Evaluation
-
-AI capabilities will be evaluated using metrics such as:
-
-Accuracy
-Precision
-Recall
-F1 Score
-Confusion Matrix
-10. STIX/TAXII Integration
-
-Future versions will support structured threat intelligence standards such as:
-
-STIX 2.x
-TAXII
-🧱 System Architecture
-
-The planned architecture follows this general workflow:
-
-                   ┌───────────────────────┐
-                   │  Intelligence Sources │
-                   └───────────┬───────────┘
-                               │
-              ┌────────────────┼────────────────┐
-              │                │                │
-             NVD              CISA            MITRE
-              │                │                │
-              └────────────────┼────────────────┘
-                               │
-                               ▼
-                   ┌────────────────────┐
-                   │ Intelligence       │
-                   │ Normalization      │
-                   └─────────┬──────────┘
-                             │
-                             ▼
-                   ┌────────────────────┐
-                   │ AI / NLP Analysis  │
-                   └─────────┬──────────┘
-                             │
-              ┌──────────────┼──────────────┐
-              ▼              ▼              ▼
-             IOCs          Threats        Entities
-              │              │              │
-              └──────────────┼──────────────┘
-                             ▼
-                   ┌────────────────────┐
-                   │ Correlation Engine │
-                   └─────────┬──────────┘
-                             │
-                             ▼
-                   ┌────────────────────┐
-                   │ Risk Prioritization│
-                   └─────────┬──────────┘
-                             │
-              ┌──────────────┼──────────────┐
-              ▼              ▼              ▼
-           Alerts        Incidents       Analytics
-              │              │              │
-              └──────────────┼──────────────┘
-                             ▼
-                   ┌────────────────────┐
-                   │ SOC Analyst        │
-                   │ Dashboard          │
-                   └────────────────────┘
-
-🛠️ Technology Stack
-Frontend
-React
-TypeScript
-Vite
-Tailwind CSS
-shadcn/ui
-Recharts
-React Leaflet
-Backend
-Node.js
-Express
-TypeScript
-Database
-SQLite
-Drizzle ORM
-AI
-Google Gemini
-Cybersecurity Intelligence
-NVD
-CISA KEV
-MITRE ATT&CK
-📂 Project Structure
-.
-├── src/
-│   ├── components/
-│   ├── pages/
-│   ├── db/
-│   ├── hooks/
-│   └── ...
-│
-├── server/
-│   ├── correlationEngine.ts
-│   ├── nvdService.ts
-│   └── ...
-│
-├── public/
-│
-├── package.json
-├── drizzle.config.ts
-├── vite.config.ts
-└── README.md
-
-⚙️ Installation
-1. Clone the repository
+### Quick Start
+```bash
+# 1. Clone the repository
 git clone https://github.com/koushik-hub-25/3rd-yr-MiniProject-.git
 cd 3rd-yr-MiniProject-
 
-2. Install dependencies
-npm install
+# 2. Install dependencies
+bun install
+# or: npm install
 
-3. Configure environment variables
+# 3. Configure environment variables
+cp .env.example .env
 
-Create a .env file in the project root.
+# 4. Start the development server (Backend + Vite)
+bun run dev
+# or: npm run dev
+```
 
-Example:
+### Production Build
+```bash
+# Compile Vite frontend and bundle Express server
+bun run build
+# or: npm run build
 
-DATABASE_URL=./data/shieldzen.db
+# Start production server
+bun run start
+# or: npm start
+```
 
-GEMINI_API_KEY=your_gemini_api_key
+---
 
-NVD_API_KEY=your_nvd_api_key
+## 12. Academic Demonstration / Viva Guide
 
+To present this platform in an academic viva or demonstration:
+1. **Start the Application:** Run `bun run dev` and open `http://localhost:3000`.
+2. **Examine CTI Telemetry:** Navigate to **Data Sources** (`/datasources`) to show live synchronization status for NVD, CISA KEV (1,682 entries), and MITRE ATT&CK (697 techniques).
+3. **Inspect Threat Intelligence Catalog:** Navigate to **Threat Intelligence** (`/intelligence`) to demonstrate multi-source fused records (`HYBRID` CVEs showing NVD CVSS + CISA KEV active exploitation flags).
+4. **Upload a Threat Advisory:** Navigate to **Upload** (`/upload`) and submit the safe synthetic report provided in Section 4.
+5. **Observe Real-Time Extraction:** Show the automatically extracted and refanged IOCs, mapped CVE-2023-34362, and linked MITRE techniques (`T1190`, `T1059.001`, `T1486`).
+6. **Demonstrate Risk Scoring:** Show the deterministic risk calculation card displaying the exact mathematical formula breakdown and 30-day half-life decay curve.
+7. **Examine Geospatial Clustering:** Navigate to **Threat Map** (`/map`) to demonstrate clustered regional nodes with risk levels and CISA KEV badges.
+8. **Demonstrate Real-Time SSE:** Open a second browser tab, trigger a manual datasource sync or upload, and show the dashboard and threat map revalidating in real time without a manual page reload.
 
-Never commit API keys or secrets to GitHub.
+---
 
-4. Start the development server
-npm run dev
+## 13. Engineering Disclosures & Limitations
 
+- **External Feed Dependency:** Synchronization with NIST NVD, CISA KEV, and MITRE STIX requires outbound internet connectivity. If external APIs are unavailable or rate-limited, ShieldZen automatically serves the verified local SQLite cache (`DEGRADED` / `CACHED` status).
+- **Synchronization Timing:** External CTI feeds are polled on scheduled background intervals (e.g., 30m for NVD, 12h for CISA, 24h for MITRE). Real-time event broadcasting occurs immediately upon backend intelligence ingestion.
+- **In-Memory Event Bus:** The SSE event bus utilizes an efficient in-memory `EventEmitter` suited for single-node deployments. Multi-node cloud deployments would benefit from a Redis Pub/Sub adapter.
+- **Geographic Bounding:** Geospatial markers are rendered only for intelligence with validated coordinates. Intelligence with unknown location is safely retained without fabricating map coordinates.
+- **Deterministic vs. AI Scoring:** Risk calculations are strictly mathematical and deterministic. AI is utilized solely for narrative summarization and structured entity extraction.
 
-The application should then be available through the local development URL shown by Vite.
+---
 
-🔐 Environment Variables
-Variable	Description	Required
-DATABASE_URL	SQLite database location	Yes
-GEMINI_API_KEY	Google Gemini API key	Optional
-NVD_API_KEY	NVD API key	Optional
+## 14. License
 
-Actual environment variable requirements may change as the project develops.
-
-🧪 Testing
-
-Testing infrastructure is being expanded as part of the project roadmap.
-
-Planned testing areas include:
-
-Unit tests
-API tests
-Risk scoring tests
-IOC extraction tests
-Authentication tests
-Integration tests
-Frontend component tests
-🔒 Security Considerations
-
-ShieldZen is a cybersecurity-focused application, therefore application security is an important part of the project.
-
-Planned security improvements include:
-
-Secure authentication
-Role-based access control
-Input validation
-File upload validation
-API rate limiting
-Security headers
-Audit logging
-Secure secret management
-Error handling
-Dependency security checks
-📈 Development Roadmap
-Feature	Status
-Threat Intelligence Dashboard	✅
-IOC Management	✅
-NVD Integration	✅
-CISA KEV Integration	✅
-MITRE ATT&CK Integration	✅
-AI-Assisted Analysis	✅
-Threat Analytics	✅
-Incident Management	✅
-Asset Management	🚧
-Explainable Risk Engine	🚧
-IOC Relationship Graph	🚧
-Incident Response Workflow	🚧
-AI SOC Analyst	🚧
-Threat Knowledge Graph	🚧
-ATT&CK Attack Chain	🚧
-Real-Time Alerts	🚧
-AI Evaluation	🚧
-STIX/TAXII	🔮
-
-Legend:
-
-✅ Implemented
-🚧 In Development
-🔮 Planned
-🎓 Academic Scope
-
-ShieldZen is being developed as a third-year mini-project with a focus on combining:
-
-Cyber Threat Intelligence
-Artificial Intelligence
-Natural Language Processing
-Vulnerability Intelligence
-Threat Correlation
-Risk Analysis
-Security Operations
-Data Visualization
-
-The project is intended as an educational cybersecurity platform and should not be considered a production-ready security product without additional security testing and hardening.
-
-🔮 Future Scope
-
-Future development may include:
-
-Machine-learning-based threat classification
-Advanced anomaly detection
-Threat actor profiling
-Automated response playbooks
-SIEM integration
-SOAR integration
-EDR integration
-STIX/TAXII feeds
-Advanced threat hunting
-Threat intelligence sharing
-Cloud security intelligence
-Container security intelligence
-👨‍💻 Development
-
-ShieldZen is actively being developed and improved.
-
-The project follows an incremental development approach where new security intelligence, analytics, automation, and investigation capabilities are added and tested progressively.
-
-⚠️ Disclaimer
-
-ShieldZen is an educational cybersecurity project.
-
-Threat intelligence, vulnerability information, AI-generated analysis, and recommendations should be independently verified before being used for real-world security decisions.
-
-Do not use the platform to conduct unauthorized security testing, exploitation, scanning, or other malicious activity.
-
-📄 License
-
-Add the project's chosen license here before public distribution.
-
-⭐ Project Goal
-
-The long-term goal of ShieldZen is to provide a unified platform that transforms large amounts of cyber threat intelligence into actionable, explainable security decisions.
-
-Collect
-   ↓
-Understand
-   ↓
-Correlate
-   ↓
-Prioritize
-   ↓
-Investigate
-   ↓
-Respond
-
-
-ShieldZen — Turning Cyber Threat Intelligence into Actionable Security Intelligence.
+Academic & Open-Source Research License. Developed for the 3rd Year Mini-Project Cybersecurity Platform.

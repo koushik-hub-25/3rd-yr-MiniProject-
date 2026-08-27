@@ -226,6 +226,25 @@ export const campaignMitreTechniques = sqliteTable("campaignMitreTechniques", {
   createdAt: integer("createdAt", { mode: "timestamp" }).notNull().default(sql`(strftime('%s', 'now'))`),
 });
 
+export const mitreTechniques = sqliteTable("mitreTechniques", {
+  id: text("id").primaryKey(), // e.g. 'T1566', 'T1566.001'
+  name: text("name").notNull(),
+  tactics: text("tactics").notNull(), // JSON string array e.g. '["Initial Access"]'
+  tacticIds: text("tacticIds"), // JSON string array e.g. '["TA0001"]'
+  description: text("description"),
+  detection: text("detection"),
+  mitigation: text("mitigation"),
+  url: text("url"),
+  version: text("version"),
+  isSubtechnique: integer("isSubtechnique").default(0),
+  parentTechniqueId: text("parentTechniqueId"),
+  source: text("source").notNull().default("MITRE ATT&CK Enterprise"),
+  sourceStatus: text("sourceStatus").default("CACHED"),
+  lastModifiedDate: text("lastModifiedDate"),
+  lastSyncedAt: integer("lastSyncedAt", { mode: "timestamp" }).notNull().default(sql`(strftime('%s', 'now'))`),
+});
+
+
 export const intelligenceSources = sqliteTable("intelligenceSources", {
   id: text("id").primaryKey(), // 'nvd', 'cisa_kev', 'mitre', 'gemini_ai', 'analyst_uploads', 'synthetic_cti'
   name: text("name").notNull(),

@@ -212,6 +212,54 @@ export const VERIFIED_NVD_CATALOG: Record<string, NvdVulnerability> = {
     source: "NIST National Vulnerability Database (NVD)"
   }
 };
+export function getNvdHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    "User-Agent": "ShieldZen-CTI-Platform/2.4 (Security-Academic-Research)",
+    "Accept": "application/json"
+  };
+  const key = process.env.NVD_API_KEY?.trim();
+  if (key && key !== "MY_NVD_API_KEY" && key !== "") {
+    headers["apiKey"] = key;
+  }
+  return headers;
+}
+
+export function parseNvdCveItem(cveItem: any): NvdVulnerability | null {
+  if (!cveItem?.id) return null;
+  const normalizedId = cveItem.id.trim().toUpperCase();
+
+  const metrics = cveItem.metrics?.cvssMetricV31?.[0]?.cvssData ||
+                  cveItem.metrics?.cvssMetricV30?.[0]?.cvssData ||
+                  cveItem.metrics?.cvssMetricV2?.[0]?.cvssData;
+
+  const desc = cveItem.descriptions?.find((d: any) => d.lang === "en")?.value ||
+               cveItem.descriptions?.[0]?.value ||
+               "No description provided.";
+  const rawScore = metrics?.baseScore || 7.5;
+  const cvssSeverity = (metrics?.baseSeverity ||
+    (rawScore >= 9.0 ? "CRITICAL" : rawScore >= 7.0 ? "HIGH" : rawScore >= 4.0 ? "MEDIUM" : "LOW")) as any;
+  const cwe = cveItem.weaknesses?.[0]?.description?.[0]?.value;
+  const references = (cveItem.references || []).slice(0, 4).map((r: any) => r.url);
+  const affectedProducts = (cveItem.configurations?.[0]?.nodes || [])
+    .flatMap((node: any) => (node.cpeMatch || []).map((m: any) => m.criteria?.split(":")?.[4] || m.criteria))
+    .filter(Boolean)
+    .slice(0, 4);
+
+  return {
+    cveId: normalizedId,
+    description: desc,
+    cvssScore: rawScore,
+    cvssSeverity,
+    cvssVector: metrics?.vectorString,
+    publishedDate: cveItem.published || new Date().toISOString(),
+    lastModifiedDate: cveItem.lastModified || new Date().toISOString(),
+    affectedProducts: affectedProducts.length > 0 ? affectedProducts : ["Enterprise Systems"],
+    cwe,
+    references,
+    source: "NIST National Vulnerability Database (Live NVD API 2.0)",
+    sourceStatus: "LIVE"
+  };
+}
 
 export async function fetchNvdCve(cveId: string): Promise<NvdVulnerability | null> {
   const normalizedId = cveId.trim().toUpperCase();
@@ -237,9 +285,7 @@ export async function fetchNvdCve(cveId: string): Promise<NvdVulnerability | nul
     const url = `https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=${encodeURIComponent(normalizedId)}`;
     const response = await fetch(url, {
       signal: controller.signal,
-      headers: {
-        "User-Agent": "ShieldZen-CTI-Platform/2.4 (Security-Academic-Research)"
-      }
+      headers: getNvdHeaders()
     });
 
     clearTimeout(timeoutId);
@@ -248,37 +294,11 @@ export async function fetchNvdCve(cveId: string): Promise<NvdVulnerability | nul
       const data = await response.json();
       const cveItem = data.vulnerabilities?.[0]?.cve;
       if (cveItem) {
-        const metrics = cveItem.metrics?.cvssMetricV31?.[0]?.cvssData ||
-                        cveItem.metrics?.cvssMetricV30?.[0]?.cvssData ||
-                        cveItem.metrics?.cvssMetricV2?.[0]?.cvssData;
-
-        const description = cveItem.descriptions?.find((d: any) => d.lang === "en")?.value || "No description provided.";
-        const cvssScore = metrics?.baseScore || 7.5;
-        const cvssSeverity = (metrics?.baseSeverity || (cvssScore >= 9.0 ? "CRITICAL" : cvssScore >= 7.0 ? "HIGH" : cvssScore >= 4.0 ? "MEDIUM" : "LOW")) as any;
-        const cwe = cveItem.weaknesses?.[0]?.description?.[0]?.value;
-        const references = (cveItem.references || []).slice(0, 3).map((r: any) => r.url);
-        const affectedProducts = (cveItem.configurations?.[0]?.nodes || [])
-          .flatMap((node: any) => (node.cpeMatch || []).map((m: any) => m.criteria?.split(":")?.[4] || m.criteria))
-          .filter(Boolean)
-          .slice(0, 4);
-
-        const result: NvdVulnerability = {
-          cveId: normalizedId,
-          description,
-          cvssScore,
-          cvssSeverity,
-          cvssVector: metrics?.vectorString,
-          publishedDate: cveItem.published,
-          lastModifiedDate: cveItem.lastModified,
-          affectedProducts: affectedProducts.length > 0 ? affectedProducts : ["Enterprise Systems"],
-          cwe,
-          references,
-          source: "NIST National Vulnerability Database (Live NVD API 2.0)",
-          sourceStatus: "LIVE"
-        };
-
-        nvdCache.set(normalizedId, { data: result, timestamp: Date.now() });
-        return result;
+        const parsed = parseNvdCveItem(cveItem);
+        if (parsed) {
+          nvdCache.set(normalizedId, { data: parsed, timestamp: Date.now() });
+          return parsed;
+        }
       }
     }
   } catch (err: any) {

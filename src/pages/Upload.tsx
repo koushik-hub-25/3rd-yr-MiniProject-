@@ -7,6 +7,7 @@ export default function Upload() {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [status, setStatus] = useState("");
+  const [correlationSummary, setCorrelationSummary] = useState<any>(null);
   const navigate = useNavigate();
 
   const handleDrop = (e: React.DragEvent) => {
@@ -19,7 +20,8 @@ export default function Upload() {
   const handleUpload = async () => {
     if (!file) return;
     setUploading(true);
-    setStatus("Extracting text and running AI analysis pipeline...");
+    setStatus("Extracting text and running AI analysis & CTI correlation pipeline...");
+    setCorrelationSummary(null);
     
     const formData = new FormData();
     formData.append("file", file);
@@ -30,13 +32,21 @@ export default function Upload() {
         body: formData,
       });
       const data = await res.json();
+
+      if (!res.ok) {
+        setStatus(data.error || "Upload failed.");
+        setUploading(false);
+        return;
+      }
       
-      setStatus("Upload successful! Analyzing in background...");
-      setTimeout(() => {
-        navigate("/reports");
-      }, 2000);
-    } catch (e) {
-      setStatus("Upload failed.");
+      if (data.correlationResult) {
+        setCorrelationSummary(data.correlationResult);
+      }
+
+      setStatus("Intelligence report analyzed & correlated with local NVD, CISA KEV, and MITRE feeds!");
+      setUploading(false);
+    } catch (e: any) {
+      setStatus("Upload failed: " + (e?.message || "Network error"));
       setUploading(false);
     }
   };
@@ -45,7 +55,7 @@ export default function Upload() {
     <div className="p-8 max-w-4xl mx-auto space-y-8">
       <div>
         <h1 className="text-3xl font-bold text-white tracking-tight">Upload Intelligence</h1>
-        <p className="text-slate-400 mt-2">Submit raw intelligence reports (TXT, PDF, DOCX) for automated threat extraction and classification.</p>
+        <p className="text-slate-400 mt-2">Submit raw intelligence reports (TXT, PDF, DOCX) for automated threat extraction, normalization, and local CTI correlation.</p>
       </div>
 
       <Card>
@@ -61,13 +71,13 @@ export default function Upload() {
               </div>
               <div>
                 <h3 className="text-lg font-medium text-white mb-1">Drag and drop report</h3>
-                <p className="text-sm text-slate-400">or click to browse files</p>
+                <p className="text-sm text-slate-400">or click to browse files (TXT, PDF, DOCX max 15MB)</p>
               </div>
               <input 
                 type="file" 
                 id="file-upload" 
                 className="hidden" 
-                accept=".txt,.pdf,.docx"
+                accept=".txt,.pdf,.docx,.log"
                 onChange={(e) => setFile(e.target.files?.[0] || null)}
               />
               <label htmlFor="file-upload" className="cursor-pointer bg-slate-800 hover:bg-slate-700 text-white px-6 py-2.5 rounded-lg font-medium transition-colors border border-slate-700">
@@ -91,15 +101,59 @@ export default function Upload() {
                 className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
               >
                 {uploading && <Loader2 className="w-4 h-4 animate-spin" />}
-                {uploading ? "Processing..." : "Run AI Analysis"}
+                {uploading ? "Processing..." : "Run AI & CTI Correlation"}
               </button>
             </div>
           )}
           
           {status && (
-            <div className="mt-4 flex items-center justify-center gap-2 text-sm text-blue-400 bg-blue-500/10 p-3 rounded-lg border border-blue-500/20">
-              {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4 text-green-500" />}
-              {status}
+            <div className={`mt-4 flex items-center justify-between gap-2 text-sm p-3 rounded-lg border ${
+              status.includes("failed") || status.includes("error")
+                ? "text-red-400 bg-red-500/10 border-red-500/20"
+                : "text-blue-400 bg-blue-500/10 border-blue-500/20"
+            }`}>
+              <div className="flex items-center gap-2">
+                {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4 text-green-500" />}
+                <span>{status}</span>
+              </div>
+              {correlationSummary && (
+                <button
+                  onClick={() => navigate(`/reports/${correlationSummary.reportId}`)}
+                  className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-3 py-1.5 rounded transition-colors"
+                >
+                  View Dossier
+                </button>
+              )}
+            </div>
+          )}
+
+          {correlationSummary && (
+            <div className="mt-6 p-5 bg-slate-900/90 rounded-xl border border-slate-800 space-y-4">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold text-white">CTI Correlation Pipeline Summary</h4>
+                <div className="flex items-center gap-1.5">
+                  {correlationSummary.sources?.map((s: string) => (
+                    <span key={s} className="px-2 py-0.5 text-[10px] font-medium rounded bg-slate-800 text-slate-300 border border-slate-700">
+                      {s}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-slate-950/70 p-3 rounded-lg border border-slate-800/80">
+                  <div className="text-xs text-slate-400">Vulnerabilities (NVD/CISA)</div>
+                  <div className="text-lg font-bold text-amber-400 mt-0.5">{correlationSummary.vulnerabilities?.length || 0}</div>
+                </div>
+                <div className="bg-slate-950/70 p-3 rounded-lg border border-slate-800/80">
+                  <div className="text-xs text-slate-400">MITRE Techniques</div>
+                  <div className="text-lg font-bold text-blue-400 mt-0.5">{correlationSummary.mitreTechniques?.length || 0}</div>
+                </div>
+                <div className="bg-slate-950/70 p-3 rounded-lg border border-slate-800/80">
+                  <div className="text-xs text-slate-400">Normalized IOCs</div>
+                  <div className="text-lg font-bold text-emerald-400 mt-0.5">{correlationSummary.iocs?.length || 0}</div>
+                </div>
+              </div>
             </div>
           )}
         </CardContent>

@@ -1,9 +1,10 @@
 import { db } from "../src/db";
-import { intelligenceSources, cachedVulnerabilities } from "../src/db/schema";
+import { intelligenceSources, cachedVulnerabilities, mitreTechniques } from "../src/db/schema";
 import { eq, desc, or, like, sql } from "drizzle-orm";
-import { VERIFIED_NVD_CATALOG, NvdVulnerability } from "./nvdService";
-import { VERIFIED_CISA_KEV_CATALOG, CisaKevEntry } from "./cisaKevService";
-import { MITRE_ATTACK_MATRIX } from "./mitreService";
+import { VERIFIED_NVD_CATALOG, NvdVulnerability, getNvdHeaders, parseNvdCveItem } from "./nvdService";
+import { VERIFIED_CISA_KEV_CATALOG, CisaKevEntry, parseCisaKevItem, setCachedKevEntries } from "./cisaKevService";
+import { MITRE_ATTACK_MATRIX, MitreTechnique, parseMitreStixAttackPattern, setDynamicMitreCache } from "./mitreService";
+import { ctiEventBus } from "./eventBus";
 
 export type IntelligenceSourceStatus = "LIVE" | "CACHED" | "SYNTHETIC" | "DEGRADED" | "ERROR" | "DISCONNECTED";
 
@@ -59,11 +60,14 @@ export interface IntelligenceFeedItem {
 // Configurable sync intervals (in minutes) with safe defaults
 const NVD_SYNC_INTERVAL_MINUTES = parseInt(process.env.NVD_SYNC_INTERVAL_MINUTES || "30", 10);
 const CISA_KEV_SYNC_INTERVAL_MINUTES = parseInt(process.env.CISA_KEV_SYNC_INTERVAL_MINUTES || "30", 10);
+const MITRE_SYNC_INTERVAL_MINUTES = parseInt(process.env.MITRE_SYNC_INTERVAL_MINUTES || "1440", 10);
 
 // In-memory runtime tracking
 let syncTimer: NodeJS.Timeout | null = null;
 let isSyncingNvd = false;
 let isSyncingCisa = false;
+let isSyncingMitre = false;
+
 
 /**
  * Calculates human-readable and deterministic freshness labels based on sync elapsed time.
@@ -243,7 +247,7 @@ async function seedInitialCachedVulnerabilities(): Promise<void> {
 
 /**
  * Synchronizes NIST NVD external intelligence.
- * Respects NVD REST API 2.0 specs with rate limiting and timeout.
+ * Implements NVD API 2.0 incremental range query with modification timestamps and pagination.
  */
 export async function syncNvdIntelligence(): Promise<{
   success: boolean;
@@ -258,67 +262,78 @@ export async function syncNvdIntelligence(): Promise<{
 
   isSyncingNvd = true;
   const startTime = Date.now();
+  const now = new Date();
+
   await db.update(intelligenceSources)
-    .set({ lastAttemptedSync: new Date() })
+    .set({ lastAttemptedSync: now })
     .where(eq(intelligenceSources.id, "nvd"));
 
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
+    // 1. Determine incremental sync window
+    const nvdSource = await db.select().from(intelligenceSources).where(eq(intelligenceSources.id, "nvd"));
+    const lastSyncCheckpoint = nvdSource[0]?.lastSuccessfulSync ? new Date(nvdSource[0].lastSuccessfulSync) : null;
 
-    // Fetch recent high-priority CVEs from NIST NVD API 2.0
-    // Query published in recent window
-    const url = "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=10";
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        "User-Agent": "ShieldZen-CTI-Platform/2.4 (Security-Academic-Research)"
-      }
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      throw new Error(`NVD API returned HTTP ${response.status}: ${response.statusText}`);
+    let startDate: Date;
+    if (lastSyncCheckpoint && !isNaN(lastSyncCheckpoint.getTime())) {
+      // NVD API 2.0 allows up to 120 consecutive days in a date query
+      const maxWindowPast = new Date(now.getTime() - 120 * 24 * 60 * 60 * 1000);
+      startDate = lastSyncCheckpoint > maxWindowPast ? lastSyncCheckpoint : maxWindowPast;
+    } else {
+      // Default initial incremental sync window: past 7 days
+      startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     }
 
-    const data = await response.json();
+    const startIso = startDate.toISOString();
+    const endIso = now.toISOString();
+
+    console.log(`[NVD Sync] Fetching modified CVEs from ${startIso} to ${endIso}...`);
+
     let recordsUpdated = 0;
+    let startIndex = 0;
+    const resultsPerPage = 2000;
+    let hasMore = true;
+    const hasApiKey = Boolean(process.env.NVD_API_KEY && process.env.NVD_API_KEY !== "MY_NVD_API_KEY");
 
-    if (Array.isArray(data.vulnerabilities)) {
-      for (const item of data.vulnerabilities) {
-        const cve = item.cve;
-        if (!cve?.id) continue;
+    while (hasMore) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
 
-        const cveId = cve.id.toUpperCase();
-        const metrics = cve.metrics?.cvssMetricV31?.[0]?.cvssData ||
-                        cve.metrics?.cvssMetricV30?.[0]?.cvssData ||
-                        cve.metrics?.cvssMetricV2?.[0]?.cvssData;
+      const url = `https://services.nvd.nist.gov/rest/json/cves/2.0?lastModStartDate=${encodeURIComponent(startIso)}&lastModEndDate=${encodeURIComponent(endIso)}&startIndex=${startIndex}&resultsPerPage=${resultsPerPage}`;
 
-        const desc = cve.descriptions?.find((d: any) => d.lang === "en")?.value || "Vulnerability record retrieved from NIST NVD.";
-        const rawScore = metrics?.baseScore || 7.5;
-        const cvssSeverity = (metrics?.baseSeverity || (rawScore >= 9.0 ? "CRITICAL" : rawScore >= 7.0 ? "HIGH" : rawScore >= 4.0 ? "MEDIUM" : "LOW")) as any;
-        const cwe = cve.weaknesses?.[0]?.description?.[0]?.value;
-        const refs = (cve.references || []).slice(0, 4).map((r: any) => r.url);
-        const affectedProducts = (cve.configurations?.[0]?.nodes || [])
-          .flatMap((node: any) => (node.cpeMatch || []).map((m: any) => m.criteria?.split(":")?.[4] || m.criteria))
-          .filter(Boolean)
-          .slice(0, 4);
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: getNvdHeaders()
+      });
 
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`NVD API HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const vulnerabilities = Array.isArray(data.vulnerabilities) ? data.vulnerabilities : [];
+      const totalResults = typeof data.totalResults === "number" ? data.totalResults : vulnerabilities.length;
+
+      for (const item of vulnerabilities) {
+        const parsed = parseNvdCveItem(item.cve);
+        if (!parsed) continue;
+
+        const cveId = parsed.cveId;
         const kev = VERIFIED_CISA_KEV_CATALOG[cveId];
 
         const existing = await db.select().from(cachedVulnerabilities).where(eq(cachedVulnerabilities.cveId, cveId));
         if (existing.length > 0) {
           await db.update(cachedVulnerabilities).set({
-            description: desc,
-            cvssScore: Math.round(rawScore * 10),
-            cvssSeverity,
-            cvssVector: metrics?.vectorString || existing[0].cvssVector,
-            cwe: cwe || existing[0].cwe,
-            publishedDate: cve.published || existing[0].publishedDate,
-            lastModifiedDate: cve.lastModified || existing[0].lastModifiedDate,
-            affectedProducts: JSON.stringify(affectedProducts.length > 0 ? affectedProducts : JSON.parse(existing[0].affectedProducts || "[]")),
-            references: JSON.stringify(refs.length > 0 ? refs : JSON.parse(existing[0].references || "[]")),
+            description: parsed.description,
+            cvssScore: Math.round(parsed.cvssScore * 10),
+            cvssSeverity: parsed.cvssSeverity,
+            cvssVector: parsed.cvssVector || existing[0].cvssVector,
+            cwe: parsed.cwe || existing[0].cwe,
+            publishedDate: parsed.publishedDate || existing[0].publishedDate,
+            lastModifiedDate: parsed.lastModifiedDate || existing[0].lastModifiedDate,
+            affectedProducts: JSON.stringify(parsed.affectedProducts.length > 0 ? parsed.affectedProducts : JSON.parse(existing[0].affectedProducts || "[]")),
+            references: JSON.stringify(parsed.references.length > 0 ? parsed.references : JSON.parse(existing[0].references || "[]")),
             sourceStatus: "LIVE",
             lastSyncedAt: new Date()
           }).where(eq(cachedVulnerabilities.cveId, cveId));
@@ -326,15 +341,15 @@ export async function syncNvdIntelligence(): Promise<{
           await db.insert(cachedVulnerabilities).values({
             cveId,
             source: kev ? "HYBRID" : "NVD",
-            description: desc,
-            cvssScore: Math.round(rawScore * 10),
-            cvssSeverity,
-            cvssVector: metrics?.vectorString,
-            cwe,
-            publishedDate: cve.published,
-            lastModifiedDate: cve.lastModified,
-            affectedProducts: JSON.stringify(affectedProducts),
-            references: JSON.stringify(refs),
+            description: parsed.description,
+            cvssScore: Math.round(parsed.cvssScore * 10),
+            cvssSeverity: parsed.cvssSeverity,
+            cvssVector: parsed.cvssVector,
+            cwe: parsed.cwe,
+            publishedDate: parsed.publishedDate,
+            lastModifiedDate: parsed.lastModifiedDate,
+            affectedProducts: JSON.stringify(parsed.affectedProducts),
+            references: JSON.stringify(parsed.references),
             isCisaKev: kev ? 1 : 0,
             cisaDateAdded: kev?.dateAdded || null,
             cisaDueDate: kev?.dueDate || null,
@@ -346,39 +361,57 @@ export async function syncNvdIntelligence(): Promise<{
         }
         recordsUpdated++;
       }
+
+      startIndex += vulnerabilities.length;
+      if (vulnerabilities.length === 0 || startIndex >= totalResults) {
+        hasMore = false;
+      } else {
+        // Rate-limit compliance pause between pagination requests
+        await new Promise(r => setTimeout(r, hasApiKey ? 650 : 3500));
+      }
     }
 
     const durationMs = Date.now() - startTime;
     const countRes = await db.select({ count: sql<number>`count(*)` }).from(cachedVulnerabilities);
     const totalCount = Number(countRes[0]?.count || recordsUpdated);
 
+    // Save checkpoint ONLY upon complete successful synchronization
     await db.update(intelligenceSources).set({
       status: "LIVE",
       isLive: 1,
-      lastSuccessfulSync: new Date(),
+      lastSuccessfulSync: now,
       syncDurationMs: durationMs,
       recordCount: totalCount,
       errorMessage: null,
-      nextScheduledSync: new Date(Date.now() + NVD_SYNC_INTERVAL_MINUTES * 60 * 1000),
-      updatedAt: new Date()
+      nextScheduledSync: new Date(now.getTime() + NVD_SYNC_INTERVAL_MINUTES * 60 * 1000),
+      updatedAt: now
     }).where(eq(intelligenceSources.id, "nvd"));
 
+    console.log(`[NVD Sync] Successfully synced ${recordsUpdated} CVEs in ${durationMs}ms. Total cached: ${totalCount}. Checkpoint saved.`);
+    ctiEventBus.emitCtiEvent("intelligence.synced", {
+      source: "NVD",
+      provider: "NIST National Vulnerability Database",
+      recordsUpdated,
+      totalCount,
+      status: "LIVE"
+    });
     isSyncingNvd = false;
     return { success: true, recordsUpdated, durationMs, status: "LIVE" };
   } catch (error: any) {
     const durationMs = Date.now() - startTime;
-    console.warn(`[Sync] NIST NVD sync encountered issue (${error.message}). Gracefully serving cached baseline.`);
+    console.warn(`[Sync] NIST NVD incremental sync warning: ${error.message}. Serving local cached vulnerability catalog.`);
 
     // Check if we have cached records
     const countRes = await db.select({ count: sql<number>`count(*)` }).from(cachedVulnerabilities);
-    const hasCache = Number(countRes[0]?.count || 0) > 0;
-    const fallbackStatus: IntelligenceSourceStatus = hasCache ? "DEGRADED" : "ERROR";
+    const cachedCount = Number(countRes[0]?.count || 0);
+    const fallbackStatus: IntelligenceSourceStatus = cachedCount > 0 ? "DEGRADED" : "ERROR";
 
+    // Update intelligence source status without resetting the lastSuccessfulSync checkpoint
     await db.update(intelligenceSources).set({
       status: fallbackStatus,
       isLive: 0,
       syncDurationMs: durationMs,
-      errorMessage: `External API lookup warning: ${error.message}. Serving local cached vulnerability catalog.`,
+      errorMessage: `NVD API warning: ${error.message}. Local cached vulnerability catalog active (${cachedCount} records).`,
       updatedAt: new Date()
     }).where(eq(intelligenceSources.id, "nvd"));
 
@@ -389,28 +422,38 @@ export async function syncNvdIntelligence(): Promise<{
 
 /**
  * Synchronizes CISA Known Exploited Vulnerabilities catalog feed.
+ * Ingests the complete official catalog (~1,200+ CVEs), deduplicates, and correlates with NVD records.
  */
 export async function syncCisaKevIntelligence(): Promise<{
   success: boolean;
-  recordsUpdated: number;
+  recordsDiscovered?: number;
+  recordsInserted?: number;
+  recordsUpdated?: number;
+  recordsUnchanged?: number;
+  recordsUpdatedCount: number;
   durationMs: number;
   status: IntelligenceSourceStatus;
+  totalKevCount?: number;
+  hybridCount?: number;
   error?: string;
 }> {
   if (isSyncingCisa) {
-    return { success: true, recordsUpdated: 0, durationMs: 0, status: "LIVE" };
+    return { success: true, recordsUpdatedCount: 0, durationMs: 0, status: "LIVE" };
   }
 
   isSyncingCisa = true;
   const startTime = Date.now();
+  const now = new Date();
+
   await db.update(intelligenceSources)
-    .set({ lastAttemptedSync: new Date() })
+    .set({ lastAttemptedSync: now })
     .where(eq(intelligenceSources.id, "cisa_kev"));
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
+    const timeoutId = setTimeout(() => controller.abort(), 18000);
 
+    console.log("[CISA Sync] Fetching official Known Exploited Vulnerabilities catalog feed...");
     const response = await fetch("https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json", {
       signal: controller.signal,
       headers: { "User-Agent": "ShieldZen-CTI/2.4 (Security-Academic-Research)" }
@@ -423,84 +466,329 @@ export async function syncCisaKevIntelligence(): Promise<{
     }
 
     const data = await response.json();
+    const vulnerabilities = Array.isArray(data.vulnerabilities) ? data.vulnerabilities : [];
+    const recordsDiscovered = vulnerabilities.length;
+    console.log(`[CISA Sync] Discovered ${recordsDiscovered} total CISA KEV catalog entries.`);
+
+    let recordsInserted = 0;
     let recordsUpdated = 0;
+    let recordsUnchanged = 0;
+    const parsedKevEntries: CisaKevEntry[] = [];
 
-    if (Array.isArray(data.vulnerabilities)) {
-      // Process first 25 high-priority vulnerabilities for caching
-      for (const item of data.vulnerabilities.slice(0, 30)) {
-        if (!item.cveID) continue;
-        const cveId = item.cveID.toUpperCase();
+    for (const item of vulnerabilities) {
+      const parsed = parseCisaKevItem(item);
+      if (!parsed) continue;
 
-        const existing = await db.select().from(cachedVulnerabilities).where(eq(cachedVulnerabilities.cveId, cveId));
-        if (existing.length > 0) {
+      const cveId = parsed.cveID;
+      parsedKevEntries.push(parsed);
+
+      const existing = await db.select().from(cachedVulnerabilities).where(eq(cachedVulnerabilities.cveId, cveId));
+      if (existing.length > 0) {
+        const current = existing[0];
+        const alreadyKev = current.isCisaKev === 1;
+        const matchingRansomware = current.knownRansomwareUse === parsed.knownRansomwareCampaignUse;
+        const matchingDateAdded = current.cisaDateAdded === parsed.dateAdded;
+        const matchingAction = current.cisaRequiredAction === parsed.requiredAction;
+
+        if (alreadyKev && matchingRansomware && matchingDateAdded && matchingAction) {
+          recordsUnchanged++;
+        } else {
+          // Update and link with NVD as HYBRID
+          const isHybrid = current.source === "NVD" || current.source === "HYBRID";
           await db.update(cachedVulnerabilities).set({
             isCisaKev: 1,
-            cisaDateAdded: item.dateAdded,
-            cisaDueDate: item.dueDate,
-            cisaRequiredAction: item.requiredAction,
-            knownRansomwareUse: item.knownRansomwareCampaignUse || "Known",
-            source: "HYBRID",
+            cisaDateAdded: parsed.dateAdded,
+            cisaDueDate: parsed.dueDate,
+            cisaRequiredAction: parsed.requiredAction,
+            knownRansomwareUse: parsed.knownRansomwareCampaignUse || "Unknown",
+            source: isHybrid ? "HYBRID" : "CISA_KEV",
             sourceStatus: "LIVE",
-            lastSyncedAt: new Date()
+            lastSyncedAt: now
           }).where(eq(cachedVulnerabilities.cveId, cveId));
-        } else {
-          await db.insert(cachedVulnerabilities).values({
-            cveId,
-            source: "CISA_KEV",
-            description: item.shortDescription || item.vulnerabilityName || "CISA Known Exploited Vulnerability",
-            cvssScore: 90, // Default 9.0 critical
-            cvssSeverity: "CRITICAL",
-            isCisaKev: 1,
-            cisaDateAdded: item.dateAdded,
-            cisaDueDate: item.dueDate,
-            cisaRequiredAction: item.requiredAction,
-            knownRansomwareUse: item.knownRansomwareCampaignUse || "Known",
-            affectedProducts: JSON.stringify([`${item.vendorProject || ""} ${item.product || ""}`.trim()]),
-            references: JSON.stringify([`https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=${cveId}`]),
-            sourceStatus: "LIVE",
-            lastSyncedAt: new Date()
-          });
+          recordsUpdated++;
         }
-        recordsUpdated++;
+      } else {
+        // Insert new CISA KEV record
+        await db.insert(cachedVulnerabilities).values({
+          cveId,
+          source: "CISA_KEV",
+          description: parsed.shortDescription || parsed.vulnerabilityName || "CISA Known Exploited Vulnerability",
+          cvssScore: 90, // Default baseline 9.0 critical pending deep NVD sync
+          cvssSeverity: "CRITICAL",
+          cvssVector: null,
+          cwe: null,
+          publishedDate: parsed.dateAdded,
+          lastModifiedDate: parsed.dateAdded,
+          isCisaKev: 1,
+          cisaDateAdded: parsed.dateAdded,
+          cisaDueDate: parsed.dueDate,
+          cisaRequiredAction: parsed.requiredAction,
+          knownRansomwareUse: parsed.knownRansomwareCampaignUse || "Unknown",
+          affectedProducts: JSON.stringify([`${parsed.vendorProject} ${parsed.product}`.trim()]),
+          references: JSON.stringify([`https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=${cveId}`]),
+          sourceStatus: "LIVE",
+          lastSyncedAt: now
+        });
+        recordsInserted++;
       }
     }
 
-    const durationMs = Date.now() - startTime;
-    const totalCount = Array.isArray(data.vulnerabilities) ? data.vulnerabilities.length : recordsUpdated;
+    // Refresh in-memory catalog
+    setCachedKevEntries(parsedKevEntries);
 
+    const durationMs = Date.now() - startTime;
+    const totalKevRes = await db.select({ count: sql<number>`count(*)` }).from(cachedVulnerabilities).where(eq(cachedVulnerabilities.isCisaKev, 1));
+    const totalKevCount = Number(totalKevRes[0]?.count || 0);
+
+    const hybridRes = await db.select({ count: sql<number>`count(*)` }).from(cachedVulnerabilities).where(eq(cachedVulnerabilities.source, "HYBRID"));
+    const hybridCount = Number(hybridRes[0]?.count || 0);
+
+    // Save synchronization checkpoint
     await db.update(intelligenceSources).set({
       status: "LIVE",
       isLive: 1,
-      lastSuccessfulSync: new Date(),
+      lastSuccessfulSync: now,
       syncDurationMs: durationMs,
-      recordCount: totalCount,
+      recordCount: totalKevCount,
       errorMessage: null,
-      nextScheduledSync: new Date(Date.now() + CISA_KEV_SYNC_INTERVAL_MINUTES * 60 * 1000),
-      updatedAt: new Date()
+      nextScheduledSync: new Date(now.getTime() + CISA_KEV_SYNC_INTERVAL_MINUTES * 60 * 1000),
+      updatedAt: now
     }).where(eq(intelligenceSources.id, "cisa_kev"));
 
+    console.log(`[CISA Sync] Full catalog sync completed in ${durationMs}ms: Discovered=${recordsDiscovered}, Inserted=${recordsInserted}, Updated=${recordsUpdated}, Unchanged=${recordsUnchanged}. Total KEVs=${totalKevCount}, Hybrids=${hybridCount}.`);
+    ctiEventBus.emitCtiEvent("intelligence.synced", {
+      source: "CISA_KEV",
+      provider: "CISA Known Exploited Vulnerabilities",
+      recordsDiscovered,
+      recordsInserted,
+      recordsUpdated,
+      totalKevCount,
+      status: "LIVE"
+    });
     isSyncingCisa = false;
-    return { success: true, recordsUpdated, durationMs, status: "LIVE" };
+    return {
+      success: true,
+      recordsDiscovered,
+      recordsInserted,
+      recordsUpdated,
+      recordsUnchanged,
+      recordsUpdatedCount: recordsInserted + recordsUpdated,
+      totalKevCount,
+      hybridCount,
+      durationMs,
+      status: "LIVE"
+    };
   } catch (error: any) {
     const durationMs = Date.now() - startTime;
     console.warn(`[Sync] CISA KEV sync encountered issue (${error.message}). Gracefully serving cached baseline.`);
 
     const countRes = await db.select({ count: sql<number>`count(*)` }).from(cachedVulnerabilities).where(eq(cachedVulnerabilities.isCisaKev, 1));
-    const hasCache = Number(countRes[0]?.count || 0) > 0;
-    const fallbackStatus: IntelligenceSourceStatus = hasCache ? "DEGRADED" : "ERROR";
+    const cachedCount = Number(countRes[0]?.count || 0);
+    const fallbackStatus: IntelligenceSourceStatus = cachedCount > 0 ? "DEGRADED" : "ERROR";
+
+    // Update status without removing lastSuccessfulSync checkpoint
+    await db.update(intelligenceSources).set({
+      status: fallbackStatus,
+      isLive: 0,
+      syncDurationMs: durationMs,
+      errorMessage: `External CISA catalog warning: ${error.message}. Serving local verified KEV catalog (${cachedCount} records).`,
+      updatedAt: new Date()
+    }).where(eq(intelligenceSources.id, "cisa_kev"));
+
+    isSyncingCisa = false;
+    return {
+      success: false,
+      recordsUpdatedCount: 0,
+      durationMs,
+      status: fallbackStatus,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Synchronizes MITRE ATT&CK Enterprise Matrix from official machine-readable STIX feed.
+ * Ingests all active attack-patterns (~690+ techniques & subtechniques), tactics, detections, and metadata into SQLite.
+ */
+export async function syncMitreIntelligence(): Promise<{
+  success: boolean;
+  recordsDiscovered?: number;
+  recordsInserted?: number;
+  recordsUpdated?: number;
+  recordsUnchanged?: number;
+  totalTechniqueCount?: number;
+  durationMs: number;
+  status: IntelligenceSourceStatus;
+  error?: string;
+}> {
+  if (isSyncingMitre) {
+    return { success: true, durationMs: 0, status: "LIVE" };
+  }
+
+  isSyncingMitre = true;
+  const startTime = Date.now();
+  const now = new Date();
+
+  await db.update(intelligenceSources)
+    .set({ lastAttemptedSync: now })
+    .where(eq(intelligenceSources.id, "mitre"));
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+    console.log("[MITRE Sync] Fetching official Enterprise ATT&CK STIX JSON feed...");
+    const url = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json";
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { "User-Agent": "ShieldZen-CTI/2.4 (Security-Academic-Research)" }
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`MITRE STIX feed returned HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const objects = Array.isArray(data.objects) ? data.objects : [];
+
+    let recordsInserted = 0;
+    let recordsUpdated = 0;
+    let recordsUnchanged = 0;
+    let recordsDiscovered = 0;
+    const dynamicCacheList: MitreTechnique[] = [];
+
+    for (const obj of objects) {
+      const parsed = parseMitreStixAttackPattern(obj);
+      if (!parsed) continue;
+
+      recordsDiscovered++;
+      const id = parsed.id;
+      const tacticsJson = JSON.stringify(parsed.tactics);
+      const tacticIdsJson = JSON.stringify(parsed.tacticIds);
+
+      dynamicCacheList.push({
+        id,
+        name: parsed.name,
+        tactic: parsed.tactics[0] || "Enterprise",
+        tacticId: parsed.tacticIds[0] || "TA0001",
+        description: parsed.description,
+        detection: parsed.detection,
+        mitigation: parsed.mitigation,
+        url: parsed.url,
+        source: `MITRE ATT&CK Enterprise ${parsed.version}`
+      });
+
+      const existing = await db.select().from(mitreTechniques).where(eq(mitreTechniques.id, id));
+      if (existing.length > 0) {
+        const current = existing[0];
+        if (current.name === parsed.name && current.tactics === tacticsJson && current.description === parsed.description) {
+          recordsUnchanged++;
+        } else {
+          await db.update(mitreTechniques).set({
+            name: parsed.name,
+            tactics: tacticsJson,
+            tacticIds: tacticIdsJson,
+            description: parsed.description,
+            detection: parsed.detection,
+            mitigation: parsed.mitigation,
+            url: parsed.url,
+            version: parsed.version,
+            isSubtechnique: parsed.isSubtechnique ? 1 : 0,
+            parentTechniqueId: parsed.parentTechniqueId || null,
+            sourceStatus: "LIVE",
+            lastModifiedDate: parsed.lastModifiedDate,
+            lastSyncedAt: now
+          }).where(eq(mitreTechniques.id, id));
+          recordsUpdated++;
+        }
+      } else {
+        await db.insert(mitreTechniques).values({
+          id,
+          name: parsed.name,
+          tactics: tacticsJson,
+          tacticIds: tacticIdsJson,
+          description: parsed.description,
+          detection: parsed.detection,
+          mitigation: parsed.mitigation,
+          url: parsed.url,
+          version: parsed.version,
+          isSubtechnique: parsed.isSubtechnique ? 1 : 0,
+          parentTechniqueId: parsed.parentTechniqueId || null,
+          source: "MITRE ATT&CK Enterprise",
+          sourceStatus: "LIVE",
+          lastModifiedDate: parsed.lastModifiedDate,
+          lastSyncedAt: now
+        });
+        recordsInserted++;
+      }
+    }
+
+    setDynamicMitreCache(dynamicCacheList);
+
+    const durationMs = Date.now() - startTime;
+    const countRes = await db.select({ count: sql<number>`count(*)` }).from(mitreTechniques);
+    const totalTechniqueCount = Number(countRes[0]?.count || recordsDiscovered);
+
+    await db.update(intelligenceSources).set({
+      status: "LIVE",
+      isLive: 1,
+      lastSuccessfulSync: now,
+      syncDurationMs: durationMs,
+      recordCount: totalTechniqueCount,
+      errorMessage: null,
+      nextScheduledSync: new Date(now.getTime() + MITRE_SYNC_INTERVAL_MINUTES * 60 * 1000),
+      updatedAt: now
+    }).where(eq(intelligenceSources.id, "mitre"));
+
+    console.log(`[MITRE Sync] Ingested ${recordsDiscovered} techniques in ${durationMs}ms (Inserted: ${recordsInserted}, Updated: ${recordsUpdated}, Unchanged: ${recordsUnchanged}). Total stored: ${totalTechniqueCount}. Checkpoint saved.`);
+    ctiEventBus.emitCtiEvent("intelligence.synced", {
+      source: "MITRE_ATTACK",
+      provider: "MITRE ATT&CK Enterprise",
+      recordsDiscovered,
+      recordsInserted,
+      recordsUpdated,
+      totalTechniqueCount,
+      status: "LIVE"
+    });
+    isSyncingMitre = false;
+    return {
+      success: true,
+      recordsDiscovered,
+      recordsInserted,
+      recordsUpdated,
+      recordsUnchanged,
+      totalTechniqueCount,
+      durationMs,
+      status: "LIVE"
+    };
+  } catch (error: any) {
+    const durationMs = Date.now() - startTime;
+    console.warn(`[Sync] MITRE ATT&CK STIX sync warning: ${error.message}. Serving local cached matrix.`);
+
+    const countRes = await db.select({ count: sql<number>`count(*)` }).from(mitreTechniques);
+    const cachedCount = Number(countRes[0]?.count || 0);
+    const fallbackStatus: IntelligenceSourceStatus = cachedCount > 0 ? "DEGRADED" : "CACHED";
 
     await db.update(intelligenceSources).set({
       status: fallbackStatus,
       isLive: 0,
       syncDurationMs: durationMs,
-      errorMessage: `External CISA catalog warning: ${error.message}. Serving local verified KEV catalog.`,
+      errorMessage: `MITRE STIX sync warning: ${error.message}. Serving cached ATT&CK matrix (${cachedCount || 12} techniques).`,
       updatedAt: new Date()
-    }).where(eq(intelligenceSources.id, "cisa_kev"));
+    }).where(eq(intelligenceSources.id, "mitre"));
 
-    isSyncingCisa = false;
-    return { success: false, recordsUpdated: 0, durationMs, status: fallbackStatus, error: error.message };
+    isSyncingMitre = false;
+    return {
+      success: false,
+      durationMs,
+      status: fallbackStatus,
+      error: error.message
+    };
   }
 }
+
 
 /**
  * Returns comprehensive data source status and freshness metadata for all intelligence sources.

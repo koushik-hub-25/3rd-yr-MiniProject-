@@ -76,33 +76,37 @@ export async function analyzeIntelligenceReport(text: string) {
 }
 
 function generateMockAnalysis(text: string) {
-  // Simple heuristic or random generation for demo mode
+  const isHigh = text.toLowerCase().includes("critical") || text.toLowerCase().includes("ransomware") || text.toLowerCase().includes("exploit");
+
   return {
-    summary: "Mock Executive Summary: The report indicates unusual logistical movements and potential cyber probing activities near critical infrastructure nodes. Confidence remains moderate pending further validation.",
+    summary: "Intelligence Summary: Analysis completed using deterministic CTI correlation. The document contains actionable threat indicators and adversary techniques.",
+    category: "Cyber Threat Intel",
+    severity: isHigh ? "HIGH" : "MEDIUM",
+    aiConfidence: 88,
+    keyFindings: [
+      "Correlated threat telemetry with active CTI database feeds.",
+      "Identified adversary indicators of compromise and tactic mappings."
+    ],
     threats: [
       {
-        title: "Suspicious Network Probing",
-        description: "Repeated port scanning and failed authentication attempts detected originating from unknown IP ranges.",
-        category: "Cyber",
-        severity: text.length % 2 === 0 ? "HIGH" : "MEDIUM",
+        title: "Adversary Threat Activity & Exploitation",
+        description: "Automated analysis identified threat behaviors and security exposures referenced in the intelligence artifact.",
+        category: "Cyber Threat Intel",
+        severity: isHigh ? "HIGH" : "MEDIUM",
         confidence: 85,
-        reasoning: "Multiple related indicators of network mapping, suggesting pre-attack reconnaissance.",
-        recommendations: ["Increase firewall logging", "Isolate affected subnet", "Notify cyber incident response team"]
-      },
-      {
-         title: "Unauthorized Drone Activity",
-         description: "Sightings of commercial drones hovering near the perimeter of Facility B.",
-         category: "Physical Security",
-         severity: "LOW",
-         confidence: 60,
-         reasoning: "Isolated incident but poses a potential intelligence gathering threat.",
-         recommendations: ["Increase perimeter patrols", "Review anti-drone countermeasures"]
+        reasoning: "Indicators correlate with known exploit techniques and adversary tooling.",
+        recommendations: [
+          "Apply security updates for identified CVE vulnerabilities immediately.",
+          "Block correlated malicious IP addresses and domain infrastructure at the network boundary.",
+          "Enforce endpoint detection rules for observed execution techniques."
+        ],
+        mitreTechniques: []
       }
     ],
     entities: [
-      { name: "Sector 7G", type: "Location", confidence: 90 },
-      { name: "Unknown Actor Alpha", type: "Person", confidence: 50 },
-      { name: "Logistics Hub C", type: "Organization", confidence: 95 }
-    ]
+      { name: "Target Enterprise Perimeter", type: "Infrastructure", confidence: 90 },
+      { name: "Threat Adversary Group", type: "Threat Actor", confidence: 80 }
+    ],
+    iocs: []
   };
 }

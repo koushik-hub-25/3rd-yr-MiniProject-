@@ -56,12 +56,15 @@ import {
   listCampaigns,
   getCampaignById
 } from "./server/threatActorService";
+import { correlateUploadedReport } from "./server/uploadCorrelationService";
+import { ctiEventBus } from "./server/eventBus";
 import {
   initializeIntelligenceSources,
   getAllDataSourcesStatus,
   getIntelligenceFeedItems,
   syncNvdIntelligence,
   syncCisaKevIntelligence,
+  syncMitreIntelligence,
   startBackgroundSyncScheduler
 } from "./server/intelligenceSyncService";
 import {
@@ -316,6 +319,39 @@ async function startServer() {
   // Seed on startup
   await seedDatabaseIfEmpty();
   await seedInitialAdmin();
+
+  // Real-Time Server-Sent Events (SSE) Stream
+  app.get("/api/events/stream", async (req, res) => {
+    // Set SSE headers
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+
+    if (typeof (res as any).flushHeaders === "function") {
+      (res as any).flushHeaders();
+    }
+
+    let sources: Record<string, string> = { nvd: "LIVE", cisa: "LIVE", mitre: "LIVE" };
+    try {
+      const srcList = await getAllDataSourcesStatus();
+      for (const s of srcList) {
+        sources[s.id] = s.status;
+      }
+    } catch (e) {
+      // safe fallback
+    }
+
+    const cleanup = ctiEventBus.registerClient(res, sources);
+
+    req.on("close", () => {
+      cleanup();
+    });
+
+    req.on("end", () => {
+      cleanup();
+    });
+  });
 
   // System Configuration & Engine Status
   app.get("/api/config", (req, res) => {
@@ -688,31 +724,57 @@ async function startServer() {
       await db.delete(threats).where(eq(threats.reportId, req.params.id));
       await db.delete(entities).where(eq(entities.reportId, req.params.id));
       await db.delete(iocs).where(eq(iocs.reportId, req.params.id));
+      await db.delete(incidents).where(eq(incidents.reportId, req.params.id));
 
-      const analysis = await analyzeIntelligenceReport(r.rawText);
+      let analysis: any = null;
+      try {
+        analysis = await analyzeIntelligenceReport(r.rawText);
+      } catch (aiErr) {
+        console.warn("[Report] AI analysis fallback during re-analysis:", aiErr);
+        analysis = {
+          summary: `Re-analyzed report ${r.filename}`,
+          severity: r.severity || "HIGH",
+          category: r.category || "Cyber Threat Intel",
+          threats: [],
+          entities: [],
+          iocs: [],
+          keyFindings: ["Analyzed using local deterministic CTI pipeline."]
+        };
+      }
+
+      // Execute full CTI correlation & deduplication pipeline
+      const correlationResult = await correlateUploadedReport({
+        reportId: req.params.id,
+        filename: r.filename,
+        text: r.rawText,
+        analysis
+      });
 
       await db.update(reports).set({
-        summary: analysis.summary,
-        keyFindings: JSON.stringify(analysis.keyFindings),
-        category: analysis.category || r.category,
-        sourceOrigin: analysis.sourceOrigin || r.sourceOrigin,
-        severity: analysis.severity || r.severity,
+        summary: correlationResult.summary,
+        keyFindings: JSON.stringify(analysis.keyFindings || []),
+        category: correlationResult.category,
+        sourceOrigin: r.sourceOrigin || "Uploaded Intelligence Document",
+        severity: correlationResult.severity,
         aiConfidence: analysis.aiConfidence || 90,
         status: "analyzed",
-        threatCount: analysis.threats.length,
-        entityCount: analysis.entities.length,
-        iocCount: analysis.iocs.length
+        threatCount: (analysis.threats || []).length,
+        entityCount: (analysis.entities || []).length,
+        iocCount: correlationResult.iocs.length
       }).where(eq(reports.id, req.params.id));
 
-      await insertAnalysisArtifacts(req.params.id, analysis);
-
-      res.json({ success: true, message: "Report re-analyzed successfully." });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to re-analyze report" });
+      res.json({
+        success: true,
+        message: "Report re-analyzed and correlated with local CTI feeds.",
+        correlationResult
+      });
+    } catch (error: any) {
+      console.error("Re-analyze report error:", error);
+      res.status(500).json({ error: "Failed to re-analyze report: " + error.message });
     }
   });
 
-  // Upload Intelligence Report (TXT, PDF, DOCX)
+  // Upload Intelligence Report (TXT, PDF, DOCX) with CTI Correlation Pipeline
   app.post("/api/upload", upload.single("file"), async (req, res) => {
     try {
       let text = "";
@@ -720,6 +782,12 @@ async function startServer() {
       let fileType = "text/plain";
 
       if (req.file) {
+        // Enforce 15MB file size limit
+        const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024;
+        if (req.file.size > MAX_FILE_SIZE_BYTES) {
+          return res.status(400).json({ error: "File size exceeds the 15MB limit." });
+        }
+
         filename = req.file.originalname;
         fileType = req.file.mimetype;
 
@@ -758,14 +826,25 @@ async function startServer() {
             console.error("DOCX parse error:", e);
             return res.status(400).json({ error: "Failed to parse DOCX document: " + (e?.message || "Invalid or unreadable document.") });
           }
-        } else {
+        } else if (
+          req.file.mimetype.startsWith("text/") ||
+          origNameLower.endsWith(".txt") ||
+          origNameLower.endsWith(".log") ||
+          origNameLower.endsWith(".csv") ||
+          origNameLower.endsWith(".json")
+        ) {
           text = req.file.buffer.toString("utf-8");
           if (!text.trim()) {
             return res.status(400).json({ error: "Uploaded text document is empty." });
           }
+        } else {
+          return res.status(400).json({ error: `Unsupported file format '${req.file.originalname}'. Supported formats: .TXT, .PDF, .DOCX.` });
         }
       } else if (req.body.text) {
-        text = req.body.text;
+        text = String(req.body.text);
+        if (!text.trim()) {
+          return res.status(400).json({ error: "Raw text cannot be empty." });
+        }
         filename = req.body.title ? `${req.body.title.replace(/[^a-zA-Z0-9_-]/g, "_")}.txt` : filename;
       } else {
         return res.status(400).json({ error: "No file or text provided" });
@@ -779,68 +858,95 @@ async function startServer() {
         filename,
         fileType,
         rawText: text,
-        summary: "Analyzing report with AI engine...",
+        summary: "Analyzing report with AI engine & CTI feeds...",
         status: "processing",
         uploadDate: new Date(),
-        analysisMode: isGemini ? "Gemini AI" : "Demo AI Mode",
+        analysisMode: isGemini ? "Gemini AI" : "Deterministic CTI Engine",
         threatCount: 0,
         entityCount: 0,
         iocCount: 0
       });
 
-      // Synchronously process or immediately complete so user sees output right away
+      // Execute AI Analysis with fallback
+      let analysis: any = null;
       try {
-        const analysis = await analyzeIntelligenceReport(text);
-
-        await db.update(reports).set({
-          summary: analysis.summary,
-          keyFindings: JSON.stringify(analysis.keyFindings),
-          category: analysis.category || "Cyber Threat Intel",
-          sourceOrigin: analysis.sourceOrigin || "Uploaded Intelligence Document",
-          severity: analysis.severity || "HIGH",
-          aiConfidence: analysis.aiConfidence || 88,
-          status: "analyzed",
-          threatCount: analysis.threats.length,
-          entityCount: analysis.entities.length,
-          iocCount: analysis.iocs.length
-        }).where(eq(reports.id, reportId));
-
-        await insertAnalysisArtifacts(reportId, analysis);
-
-        const token = extractSessionToken(req);
-        const currentUser = token ? await getUserFromSession(token) : null;
-        await logAuditEvent({
-          userId: currentUser?.id || null,
-          userEmail: currentUser?.email || "analyst@shieldzen.sec",
-          action: "REPORT_UPLOADED_AND_ANALYZED",
-          resourceType: "REPORT",
-          resourceId: reportId,
-          ipAddress: req.ip || req.socket.remoteAddress,
-          details: {
-            filename,
-            severity: analysis.severity,
-            threatCount: analysis.threats.length,
-            iocCount: analysis.iocs.length
-          }
-        });
-
-        res.json({
-          id: reportId,
-          status: "analyzed",
-          summary: analysis.summary,
-          threatCount: analysis.threats.length,
-          iocCount: analysis.iocs.length,
-          severity: analysis.severity
-        });
+        analysis = await analyzeIntelligenceReport(text);
       } catch (analysisErr) {
-        console.error("Direct analysis failed, marked as fallback analyzed:", analysisErr);
-        await db.update(reports).set({ status: "analyzed" }).where(eq(reports.id, reportId));
-        res.json({ id: reportId, status: "analyzed" });
+        console.warn("[Upload] AI analysis fallback:", analysisErr);
+        analysis = {
+          summary: `Intelligence analysis for ${filename}`,
+          severity: "HIGH",
+          category: "Cyber Threat Intel",
+          threats: [{
+            title: `Extracted threats from ${filename}`,
+            description: text.substring(0, 300),
+            category: "Cyber Threat Intel",
+            severity: "HIGH",
+            confidence: 85,
+            reasoning: "Extracted from analyst uploaded artifact.",
+            evidence: text.substring(0, 300),
+            mitreTechniques: []
+          }],
+          entities: [],
+          iocs: [],
+          keyFindings: ["Ingested via local threat correlation pipeline."]
+        };
       }
 
-    } catch (error) {
+      // Execute Full CTI Correlation & Deduplication Pipeline
+      const correlationResult = await correlateUploadedReport({
+        reportId,
+        filename,
+        text,
+        analysis
+      });
+
+      // Update Report Header with Final Counts
+      await db.update(reports).set({
+        summary: correlationResult.summary,
+        keyFindings: JSON.stringify(analysis?.keyFindings || []),
+        category: correlationResult.category,
+        sourceOrigin: analysis?.sourceOrigin || "Uploaded Intelligence Document",
+        severity: correlationResult.severity,
+        aiConfidence: analysis?.aiConfidence || 88,
+        status: "analyzed",
+        threatCount: (analysis?.threats || []).length,
+        entityCount: (analysis?.entities || []).length,
+        iocCount: correlationResult.iocs.length
+      }).where(eq(reports.id, reportId));
+
+      const token = extractSessionToken(req);
+      const currentUser = token ? await getUserFromSession(token) : null;
+      await logAuditEvent({
+        userId: currentUser?.id || null,
+        userEmail: currentUser?.email || "analyst@shieldzen.sec",
+        action: "REPORT_UPLOADED_AND_CORRELATED",
+        resourceType: "REPORT",
+        resourceId: reportId,
+        ipAddress: req.ip || req.socket.remoteAddress,
+        details: {
+          filename,
+          severity: correlationResult.severity,
+          vulnerabilityCount: correlationResult.vulnerabilities.length,
+          mitreCount: correlationResult.mitreTechniques.length,
+          iocCount: correlationResult.iocs.length,
+          sources: correlationResult.sources
+        }
+      });
+
+      res.json({
+        id: reportId,
+        status: "analyzed",
+        summary: correlationResult.summary,
+        threatCount: (analysis?.threats || []).length,
+        iocCount: correlationResult.iocs.length,
+        severity: correlationResult.severity,
+        correlationResult
+      });
+
+    } catch (error: any) {
       console.error("Upload error:", error);
-      res.status(500).json({ error: "Failed to upload and analyze report" });
+      res.status(500).json({ error: "Failed to upload and analyze report: " + error.message });
     }
   });
 
@@ -1660,58 +1766,183 @@ async function startServer() {
     }
   });
 
-  // Heatmap data with enriched coordinates and metrics
+  // Upgraded Heatmap Pipeline: Consumes Phase G Deterministic Risk Model & Geographic Aggregation
   app.get("/api/heatmap", async (req, res) => {
     try {
       const allInc = (await db.query.incidents.findMany()) as any[];
-      const cityMap: Record<string, { lat: number; lng: number; incidents: any[]; categoryCount: Record<string, number>; maxSev: string }> = {};
+      const allVulns = (await db.query.cachedVulnerabilities.findMany()) as any[];
+      const vulnMap = new Map<string, any>();
+      for (const v of allVulns) {
+        vulnMap.set(v.cveId.toUpperCase(), v);
+      }
 
-      allInc.forEach(inc => {
-        if (!inc.coordinates || typeof inc.coordinates !== "string") return;
+      // Strict Geographic Grouping & Validation
+      const nodeClusterMap: Record<string, {
+        lat: number;
+        lng: number;
+        location: string;
+        incidents: any[];
+        sources: Set<string>;
+        maxRiskScore: number;
+        maxRiskLevel: string;
+        maxSeverity: string;
+        maxCvss: number | null;
+        hasKev: boolean;
+        hasRansomware: boolean;
+        totalIocs: number;
+        mitreTechniques: Set<string>;
+        firstSeen: Date;
+        lastSeen: Date;
+      }> = {};
+
+      for (const inc of allInc) {
+        if (!inc.coordinates || typeof inc.coordinates !== "string") continue;
         const [latStr, lngStr] = inc.coordinates.split(",");
         const lat = parseFloat(latStr);
         const lng = parseFloat(lngStr);
-        if (isNaN(lat) || isNaN(lng)) return;
 
-        const key = `${lat.toFixed(2)},${lng.toFixed(2)}`;
-        if (!cityMap[key]) {
-          cityMap[key] = {
+        // Strict coordinate bounding check (lat: -90..90, lng: -180..180)
+        if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+          continue;
+        }
+
+        const clusterKey = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+        const incDate = inc.date ? new Date(inc.date) : new Date();
+
+        // Check if incident references any CVEs in title/description/malware
+        const fullText = `${inc.title || ""} ${inc.description || ""} ${inc.malware || ""} ${inc.threatActor || ""}`;
+        const cveMatches = fullText.match(/CVE-\d{4}-\d{4,7}/gi) || [];
+        let matchingVuln: any = null;
+        for (const cve of cveMatches) {
+          const v = vulnMap.get(cve.toUpperCase());
+          if (v) {
+            matchingVuln = v;
+            break;
+          }
+        }
+
+        // Check for MITRE technique references
+        const mitreMatches = fullText.match(/T\d{4}(?:\.\d{3})?/gi) || [];
+
+        // Evaluate Deterministic Multi-Factor Risk for this incident
+        const riskAssessment = calculateDeterministicRiskScore({
+          severity: inc.severity || "MEDIUM",
+          detectedAt: incDate,
+          iocCount: inc.relatedIocCount || 0,
+          isCisaKev: matchingVuln?.isCisaKev === 1,
+          knownRansomwareUse: matchingVuln?.knownRansomwareUse,
+          cvssScore: matchingVuln?.cvssScore ? matchingVuln.cvssScore / 10 : undefined,
+          mitreTechniqueCount: mitreMatches.length
+        });
+
+        if (!nodeClusterMap[clusterKey]) {
+          nodeClusterMap[clusterKey] = {
             lat,
             lng,
+            location: inc.location || "Monitored Sector Node",
             incidents: [],
-            categoryCount: {},
-            maxSev: "LOW"
+            sources: new Set(["ANALYST_VERIFIED", "GEOSPATIAL_TELEMETRY"]),
+            maxRiskScore: 0,
+            maxRiskLevel: "LOW",
+            maxSeverity: "LOW",
+            maxCvss: null,
+            hasKev: false,
+            hasRansomware: false,
+            totalIocs: 0,
+            mitreTechniques: new Set<string>(),
+            firstSeen: incDate,
+            lastSeen: incDate
           };
         }
 
-        cityMap[key].incidents.push(inc);
-        const cat = String(inc.category || "Cyber Threat");
-        cityMap[key].categoryCount[cat] = (cityMap[key].categoryCount[cat] || 0) + 1;
-        if (inc.severity === "CRITICAL") cityMap[key].maxSev = "CRITICAL";
-        else if (inc.severity === "HIGH" && cityMap[key].maxSev !== "CRITICAL") cityMap[key].maxSev = "HIGH";
-      });
+        const cluster = nodeClusterMap[clusterKey];
+        cluster.incidents.push({
+          id: inc.id,
+          title: inc.title,
+          date: inc.date,
+          severity: inc.severity,
+          category: inc.category,
+          malware: inc.malware,
+          threatActor: inc.threatActor,
+          riskScore: riskAssessment.score,
+          riskLevel: riskAssessment.level
+        });
 
-      const heatmap = Object.values(cityMap).map(item => {
-        const topCat = Object.entries(item.categoryCount).sort((a, b) => b[1] - a[1])[0]?.[0] || "Cyber Threat";
-        const weight = item.maxSev === "CRITICAL" ? 9 : item.maxSev === "HIGH" ? 7 : item.maxSev === "MEDIUM" ? 5 : 3;
+        if (riskAssessment.score > cluster.maxRiskScore) {
+          cluster.maxRiskScore = riskAssessment.score;
+          cluster.maxRiskLevel = riskAssessment.level;
+        }
+
+        const sevOrder: Record<string, number> = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+        if ((sevOrder[inc.severity] || 0) > (sevOrder[cluster.maxSeverity] || 0)) {
+          cluster.maxSeverity = inc.severity;
+        }
+
+        if (matchingVuln) {
+          cluster.sources.add("AUTHORITATIVE_NVD");
+          if (matchingVuln.cvssScore && (cluster.maxCvss === null || (matchingVuln.cvssScore / 10) > cluster.maxCvss)) {
+            cluster.maxCvss = matchingVuln.cvssScore / 10;
+          }
+          if (matchingVuln.isCisaKev === 1) {
+            cluster.hasKev = true;
+            cluster.sources.add("AUTHORITATIVE_CISA");
+          }
+          if (matchingVuln.knownRansomwareUse && String(matchingVuln.knownRansomwareUse).toLowerCase().includes("known")) {
+            cluster.hasRansomware = true;
+          }
+        }
+
+        cluster.totalIocs += (inc.relatedIocCount || 0);
+        mitreMatches.forEach(m => cluster.mitreTechniques.add(m.toUpperCase()));
+        if (incDate < cluster.firstSeen) cluster.firstSeen = incDate;
+        if (incDate > cluster.lastSeen) cluster.lastSeen = incDate;
+      }
+
+      const heatmapNodes = Object.values(nodeClusterMap).map(c => {
+        // Map deterministic risk score (0-100) to Leaflet display weight (1-10)
+        const weight = Math.max(1, Math.min(10, Math.round(c.maxRiskScore / 10)));
         return {
-          lat: item.lat,
-          lng: item.lng,
-          location: item.incidents[0]?.location || "Monitored Sector",
-          incidentCount: item.incidents.length,
-          severity: item.maxSev,
+          lat: c.lat,
+          lng: c.lng,
+          location: c.location,
+          riskScore: c.maxRiskScore,
+          riskLevel: c.maxRiskLevel,
           weight,
-          category: topCat,
-          primaryVector: topCat,
-          dominantCategory: topCat,
-          trend: item.incidents.length > 2 ? "Surging" : "Stable",
-          confidence: 90
+          severity: c.maxSeverity,
+          cvss: c.maxCvss,
+          kevStatus: c.hasKev,
+          ransomwareUse: c.hasRansomware ? "Known" : "Unknown",
+          iocCount: c.totalIocs,
+          mitreTechniqueCount: c.mitreTechniques.size,
+          incidentCount: c.incidents.length,
+          category: c.incidents[0]?.category || "Cyber Incident",
+          primaryVector: c.incidents[0]?.category || "Cyber Incident",
+          sources: Array.from(c.sources),
+          firstSeen: c.firstSeen.toISOString(),
+          lastSeen: c.lastSeen.toISOString(),
+          incidents: c.incidents.slice(0, 10) // sanitized list
         };
       });
 
-      res.json(heatmap);
-    } catch (e) {
-      res.status(500).json({ error: "Failed to compute heatmap" });
+      // Compute Global Heatmap Summary Metrics
+      const summary = {
+        totalNodes: heatmapNodes.length,
+        critical: heatmapNodes.filter(n => n.riskLevel === "CRITICAL").length,
+        high: heatmapNodes.filter(n => n.riskLevel === "HIGH").length,
+        medium: heatmapNodes.filter(n => n.riskLevel === "MEDIUM").length,
+        low: heatmapNodes.filter(n => n.riskLevel === "LOW").length,
+        totalEvents: allInc.length,
+        activeKevNodes: heatmapNodes.filter(n => n.kevStatus).length
+      };
+
+      if (req.query.format === "envelope") {
+        return res.json({ nodes: heatmapNodes, summary });
+      }
+
+      res.json(heatmapNodes);
+    } catch (e: any) {
+      console.error("Heatmap computation error:", e);
+      res.status(500).json({ error: "Failed to compute heatmap: " + e.message });
     }
   });
 
@@ -2142,7 +2373,9 @@ async function startServer() {
         result = await syncNvdIntelligence();
       } else if (sourceId === "cisa_kev") {
         result = await syncCisaKevIntelligence();
-      } else if (sourceId === "mitre" || sourceId === "gemini_ai" || sourceId === "synthetic_cti" || sourceId === "analyst_uploads") {
+      } else if (sourceId === "mitre") {
+        result = await syncMitreIntelligence();
+      } else if (sourceId === "gemini_ai" || sourceId === "synthetic_cti" || sourceId === "analyst_uploads") {
         // Refresh metadata
         result = {
           success: true,

@@ -172,6 +172,31 @@ export const VERIFIED_CISA_KEV_CATALOG: Record<string, CisaKevEntry> = {
   }
 };
 
+export function parseCisaKevItem(item: any): CisaKevEntry | null {
+  if (!item?.cveID) return null;
+  const cveID = item.cveID.trim().toUpperCase();
+  return {
+    cveID,
+    vendorProject: item.vendorProject || "Unknown",
+    product: item.product || "Unknown",
+    vulnerabilityName: item.vulnerabilityName || "Known Exploited Vulnerability",
+    dateAdded: item.dateAdded || new Date().toISOString().substring(0, 10),
+    shortDescription: item.shortDescription || item.vulnerabilityName || "CISA Known Exploited Vulnerability",
+    requiredAction: item.requiredAction || "Apply updates per vendor instructions.",
+    dueDate: item.dueDate || "N/A",
+    knownRansomwareCampaignUse: item.knownRansomwareCampaignUse || "Unknown",
+    notes: item.notes || "",
+    source: "Official CISA KEV Feed (Live Sync)"
+  };
+}
+
+export function setCachedKevEntries(entries: CisaKevEntry[]): void {
+  for (const entry of entries) {
+    cachedKevCatalog[entry.cveID.toUpperCase()] = entry;
+  }
+  lastKevFetch = Date.now();
+}
+
 let cachedKevCatalog: Record<string, CisaKevEntry> = { ...VERIFIED_CISA_KEV_CATALOG };
 let lastKevFetch = 0;
 
@@ -182,11 +207,11 @@ export async function checkCisaKev(cveId: string): Promise<{ isKnownExploited: b
   if (Date.now() - lastKevFetch > 1000 * 60 * 60 * 12) {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3500);
+      const timeout = setTimeout(() => controller.abort(), 8000);
 
       const res = await fetch("https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json", {
         signal: controller.signal,
-        headers: { "User-Agent": "ShieldZen-CTI/2.4" }
+        headers: { "User-Agent": "ShieldZen-CTI/2.4 (Security-Academic-Research)" }
       });
       clearTimeout(timeout);
 
@@ -194,20 +219,9 @@ export async function checkCisaKev(cveId: string): Promise<{ isKnownExploited: b
         const json = await res.json();
         if (Array.isArray(json.vulnerabilities)) {
           json.vulnerabilities.forEach((v: any) => {
-            if (v.cveID) {
-              cachedKevCatalog[v.cveID.toUpperCase()] = {
-                cveID: v.cveID,
-                vendorProject: v.vendorProject,
-                product: v.product,
-                vulnerabilityName: v.vulnerabilityName,
-                dateAdded: v.dateAdded,
-                shortDescription: v.shortDescription,
-                requiredAction: v.requiredAction,
-                dueDate: v.dueDate,
-                knownRansomwareCampaignUse: v.knownRansomwareCampaignUse || "Unknown",
-                notes: v.notes,
-                source: "Official CISA KEV Feed (Live Sync)"
-              };
+            const parsed = parseCisaKevItem(v);
+            if (parsed) {
+              cachedKevCatalog[parsed.cveID] = parsed;
             }
           });
           lastKevFetch = Date.now();

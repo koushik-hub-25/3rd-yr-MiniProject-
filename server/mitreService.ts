@@ -145,17 +145,122 @@ export const MITRE_ATTACK_MATRIX: Record<string, MitreTechnique> = {
   }
 };
 
+export const MITRE_TACTIC_MAP: Record<string, { name: string; id: string }> = {
+  "initial-access": { name: "Initial Access", id: "TA0001" },
+  "execution": { name: "Execution", id: "TA0002" },
+  "persistence": { name: "Persistence", id: "TA0003" },
+  "privilege-escalation": { name: "Privilege Escalation", id: "TA0004" },
+  "defense-evasion": { name: "Defense Evasion", id: "TA0005" },
+  "credential-access": { name: "Credential Access", id: "TA0006" },
+  "discovery": { name: "Discovery", id: "TA0007" },
+  "lateral-movement": { name: "Lateral Movement", id: "TA0008" },
+  "collection": { name: "Collection", id: "TA0009" },
+  "command-and-control": { name: "Command and Control", id: "TA0011" },
+  "exfiltration": { name: "Exfiltration", id: "TA0010" },
+  "impact": { name: "Impact", id: "TA0040" },
+  "resource-development": { name: "Resource Development", id: "TA0042" },
+  "reconnaissance": { name: "Reconnaissance", id: "TA0043" }
+};
+
+export function parseMitreStixAttackPattern(obj: any): {
+  id: string;
+  name: string;
+  tactics: string[];
+  tacticIds: string[];
+  description: string;
+  detection: string;
+  mitigation: string;
+  url: string;
+  version: string;
+  isSubtechnique: boolean;
+  parentTechniqueId?: string;
+  lastModifiedDate: string;
+} | null {
+  if (obj?.type !== "attack-pattern" || obj.revoked || obj.x_mitre_deprecated) {
+    return null;
+  }
+
+  const mitreRef = (obj.external_references || []).find((r: any) => r.source_name === "mitre-attack");
+  if (!mitreRef?.external_id) return null;
+
+  const id = mitreRef.external_id.trim().toUpperCase();
+  const name = obj.name || id;
+  const description = obj.description || "No description provided.";
+  const detection = obj.x_mitre_detection || "";
+  const url = mitreRef.url || `https://attack.mitre.org/techniques/${id}/`;
+  const version = obj.x_mitre_version || obj.spec_version || "v15";
+  const isSubtechnique = Boolean(obj.x_mitre_is_subtechnique);
+  const parentTechniqueId = isSubtechnique && id.includes(".") ? id.split(".")[0] : undefined;
+  const lastModifiedDate = obj.modified || new Date().toISOString();
+
+  const tactics: string[] = [];
+  const tacticIds: string[] = [];
+
+  for (const phase of obj.kill_chain_phases || []) {
+    if (phase.kill_chain_name === "mitre-attack" && phase.phase_name) {
+      const mapped = MITRE_TACTIC_MAP[phase.phase_name.toLowerCase()];
+      if (mapped) {
+        if (!tactics.includes(mapped.name)) tactics.push(mapped.name);
+        if (!tacticIds.includes(mapped.id)) tacticIds.push(mapped.id);
+      } else {
+        const fallbackName = phase.phase_name.replace(/-/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
+        if (!tactics.includes(fallbackName)) tactics.push(fallbackName);
+      }
+    }
+  }
+
+  return {
+    id,
+    name,
+    tactics: tactics.length > 0 ? tactics : ["Enterprise"],
+    tacticIds,
+    description,
+    detection,
+    mitigation: "",
+    url,
+    version,
+    isSubtechnique,
+    parentTechniqueId,
+    lastModifiedDate
+  };
+}
+
+let dynamicMitreCache = new Map<string, MitreTechnique>();
+
+export function setDynamicMitreCache(techniques: MitreTechnique[]) {
+  for (const t of techniques) {
+    dynamicMitreCache.set(t.id.toUpperCase(), t);
+  }
+}
+
 export function lookupMitreTechnique(identifierOrName: string): MitreTechnique | null {
   const clean = identifierOrName.trim().toUpperCase();
-  // Check exact ID or substring ID (e.g. "T1566" or "T1566.001" or "T1566 - Phishing")
+
+  // 1. Check dynamic cache
+  if (dynamicMitreCache.has(clean)) {
+    return dynamicMitreCache.get(clean)!;
+  }
+
+  // 2. Check static matrix
   for (const [id, tech] of Object.entries(MITRE_ATTACK_MATRIX)) {
+    if (clean === id || clean.includes(id) || clean === tech.name.toUpperCase() || clean.includes(tech.name.toUpperCase())) {
+      return tech;
+    }
+  }
+
+  // 3. Substring check in dynamic cache
+  for (const [id, tech] of dynamicMitreCache.entries()) {
     if (clean.includes(id) || clean.includes(tech.name.toUpperCase())) {
       return tech;
     }
   }
+
   return null;
 }
 
 export function getAllMitreTechniques(): MitreTechnique[] {
+  if (dynamicMitreCache.size > 0) {
+    return Array.from(dynamicMitreCache.values());
+  }
   return Object.values(MITRE_ATTACK_MATRIX);
 }

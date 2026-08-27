@@ -10,6 +10,7 @@ import { Card, CardHeader, CardTitle, CardContent, Badge, SeverityBadge, Confide
 import { SourceFilterBar, SourceFilterType } from "../components/SourceFilterBar";
 import { AIAnalystDrawer } from "../components/AIAnalystDrawer";
 import { ExplainableRiskScoreCard } from "../components/ExplainableRiskScoreCard";
+import { useRealtimeEvent } from "../context/RealtimeContext";
 
 export default function ThreatIntelligence() {
   const [searchParams] = useSearchParams();
@@ -54,6 +55,13 @@ export default function ThreatIntelligence() {
   useEffect(() => {
     fetchThreats();
   }, []);
+
+  useRealtimeEvent("report.correlated", () => {
+    fetchThreats();
+  });
+  useRealtimeEvent("intelligence.synced", () => {
+    fetchThreats();
+  });
 
   // Whenever selected threat changes, perform multi-source correlation (NVD + CISA KEV + MITRE)
   useEffect(() => {

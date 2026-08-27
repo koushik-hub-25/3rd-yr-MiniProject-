@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import React, { useState, useEffect } from "react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { RealtimeProvider, useRealtime } from "./context/RealtimeContext";
 import { ShieldZenLogo, cn } from "./components/ui";
 import { NotificationCenter } from "./components/NotificationCenter";
 import { AIAnalystDrawer } from "./components/AIAnalystDrawer";
@@ -235,6 +236,9 @@ function TopNavigation({ onOpenAiAssistant }: { onOpenAiAssistant: () => void })
                 className="bg-[#080D1A] border border-slate-700/80 text-slate-200 placeholder-slate-500 text-xs pl-8 pr-3 py-1.5 rounded-xl w-40 lg:w-56 focus:outline-none focus:border-cyan-500/80 focus:ring-1 focus:ring-cyan-500/30 transition-all font-sans"
               />
             </form>
+
+            {/* Realtime Connection Status Pill */}
+            <RealtimeStatusIndicator />
 
             {/* AI Analyst Button */}
             <button
@@ -536,22 +540,51 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function RealtimeStatusIndicator() {
+  const { status, sourceStatus } = useRealtime();
+
+  return (
+    <div
+      className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[#080D1A] border border-slate-800 text-[11px] font-mono select-none"
+      title={`Real-Time SSE Stream: ${status} | NVD: ${sourceStatus.nvd || "LIVE"} | CISA: ${sourceStatus.cisa || "LIVE"} | MITRE: ${sourceStatus.mitre || "LIVE"}`}
+    >
+      <span className="relative flex h-2 w-2">
+        {status === "LIVE" && (
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+        )}
+        <span className={`relative inline-flex rounded-full h-2 w-2 ${
+          status === "LIVE" ? "bg-emerald-500" :
+          status === "RECONNECTING" ? "bg-amber-500 animate-pulse" : "bg-red-500"
+        }`}></span>
+      </span>
+      <span className={`font-bold ${
+        status === "LIVE" ? "text-emerald-400" :
+        status === "RECONNECTING" ? "text-amber-400" : "text-red-400"
+      }`}>
+        {status}
+      </span>
+    </div>
+  );
+}
+
 export default function App() {
   return (
     <AuthProvider>
-      <Router>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route
-            path="/*"
-            element={
-              <ProtectedRoute>
-                <MainLayout />
-              </ProtectedRoute>
-            }
-          />
-        </Routes>
-      </Router>
+      <RealtimeProvider>
+        <Router>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route
+              path="/*"
+              element={
+                <ProtectedRoute>
+                  <MainLayout />
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </Router>
+      </RealtimeProvider>
     </AuthProvider>
   );
 }
